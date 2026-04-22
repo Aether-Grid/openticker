@@ -1,0 +1,662 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "cycles-detail";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="cycles-detail" hidden={!isActive}>
+  <div class="toolbar-row cycle-detail-toolbar">
+    <a href="/cycles" class="toolbar-button" id="cycle-detail-back-link">Back To Cycles</a>
+    <div class="cycle-nav-actions">
+      <button type="button" class="toolbar-button" id="cycle-detail-prev" disabled>Previous</button>
+      <button type="button" class="toolbar-button" id="cycle-detail-next" disabled>Next</button>
+      <button type="button" class="toolbar-button" id="cycle-detail-copy" disabled>Copy Trace ID</button>
+    </div>
+  </div>
+
+  <article class="panel panel-section cycle-detail-hero">
+    <div class="panel-head cycle-detail-head">
+      <div>
+        <p class="eyebrow">Cycle Trace</p>
+        <h3 id="cycle-detail-title">Loading cycle...</h3>
+        <p id="cycle-detail-subtitle">Fetching trace payload and associated context.</p>
+      </div>
+      <span id="cycle-detail-outcome" class="badge badge-meta info">loading</span>
+    </div>
+    <div class="cycle-detail-kpi-grid">
+      <div class="summary-box"><span>Trace ID</span><strong id="cycle-detail-trace-id">-</strong></div>
+      <div class="summary-box"><span>Bot</span><strong id="cycle-detail-bot-id">-</strong></div>
+      <div class="summary-box"><span>Ticker</span><strong id="cycle-detail-symbol">-</strong></div>
+      <div class="summary-box"><span>Phase</span><strong id="cycle-detail-phase">-</strong></div>
+      <div class="summary-box"><span>Trigger</span><strong id="cycle-detail-trigger">-</strong></div>
+      <div class="summary-box"><span>Bar Timestamp</span><strong id="cycle-detail-bar">-</strong></div>
+      <div class="summary-box"><span>Recorded</span><strong id="cycle-detail-created">-</strong></div>
+      <div class="summary-box"><span>Risk Decision</span><strong id="cycle-detail-risk">-</strong></div>
+    </div>
+  </article>
+
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Step Rail</h3>
+        <p>Lifecycle progression from trigger to reconciliation for this single cycle.</p>
+      </div>
+    </div>
+    <div id="cycle-detail-rail" class="cycle-step-rail"></div>
+  </article>
+
+  <div class="grid-two wide-left cycle-detail-columns">
+    <div class="stack">
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Decision Highlights</h3>
+            <p>Structured narrative for signal, intent, risk, execution, and position outcomes.</p>
+          </div>
+        </div>
+        <div id="cycle-detail-highlights" class="cycle-highlight-grid"></div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Reconciliation Snapshot</h3>
+            <p>Latest safety posture linked to this cycle.</p>
+          </div>
+        </div>
+        <div class="activity-selected-grid">
+          <div class="detail-row"><span>Safe To Trade</span><strong id="cycle-recon-safe">-</strong></div>
+          <div class="detail-row"><span>Source</span><strong id="cycle-recon-source">-</strong></div>
+          <div class="detail-row"><span>Local Orders</span><strong id="cycle-recon-local-orders">-</strong></div>
+          <div class="detail-row"><span>Connector Orders</span><strong id="cycle-recon-connector-orders">-</strong></div>
+          <div class="detail-row"><span>Local Position</span><strong id="cycle-recon-local-position">-</strong></div>
+          <div class="detail-row"><span>Connector Position</span><strong id="cycle-recon-connector-position">-</strong></div>
+        </div>
+        <p id="cycle-recon-reason" class="terminal-note">No reconciliation context recorded.</p>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Related Records</h3>
+            <p>Journal entries and identifiers connected to this trace.</p>
+          </div>
+        </div>
+        <ul id="cycle-related-records" class="difference-list"></ul>
+      </article>
+    </div>
+
+    <div class="stack">
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Capital Before</h3>
+            <p>Ledger room and allocations before evaluating the cycle.</p>
+          </div>
+        </div>
+        <div id="cycle-capital-before" class="cycle-capital-grid"></div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Capital After</h3>
+            <p>Ledger room and allocations after execution and position updates.</p>
+          </div>
+        </div>
+        <div id="cycle-capital-after" class="cycle-capital-grid"></div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Related Events</h3>
+            <p>Runtime events emitted in this trace window.</p>
+          </div>
+        </div>
+        <pre id="cycle-related-events" class="terminal small">No related events captured.</pre>
+      </article>
+    </div>
+  </div>
+
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Raw Payloads</h3>
+        <p>Exact trace payload sections for deep debugging and copy/paste workflows.</p>
+      </div>
+    </div>
+    <div class="cycle-raw-grid">
+      <details class="cycle-raw-card" open>
+        <summary>Core Steps JSON</summary>
+        <pre id="cycle-raw-steps" class="terminal small">No cycle loaded.</pre>
+      </details>
+      <details class="cycle-raw-card">
+        <summary>Capital JSON</summary>
+        <pre id="cycle-raw-capital" class="terminal small">No cycle loaded.</pre>
+      </details>
+      <details class="cycle-raw-card">
+        <summary>Events JSON</summary>
+        <pre id="cycle-raw-events" class="terminal small">No cycle loaded.</pre>
+      </details>
+    </div>
+  </article>
+</section>
+
+{isActive && (
+<script is:inline>
+  (() => {
+    const page = document.querySelector('[data-page="cycles-detail"]');
+    if (!page) {
+      return;
+    }
+
+    const elements = {
+      backLink: document.getElementById("cycle-detail-back-link"),
+      prevButton: document.getElementById("cycle-detail-prev"),
+      nextButton: document.getElementById("cycle-detail-next"),
+      copyButton: document.getElementById("cycle-detail-copy"),
+      title: document.getElementById("cycle-detail-title"),
+      subtitle: document.getElementById("cycle-detail-subtitle"),
+      outcome: document.getElementById("cycle-detail-outcome"),
+      traceId: document.getElementById("cycle-detail-trace-id"),
+      botId: document.getElementById("cycle-detail-bot-id"),
+      symbol: document.getElementById("cycle-detail-symbol"),
+      phase: document.getElementById("cycle-detail-phase"),
+      trigger: document.getElementById("cycle-detail-trigger"),
+      bar: document.getElementById("cycle-detail-bar"),
+      created: document.getElementById("cycle-detail-created"),
+      risk: document.getElementById("cycle-detail-risk"),
+      rail: document.getElementById("cycle-detail-rail"),
+      highlights: document.getElementById("cycle-detail-highlights"),
+      reconSafe: document.getElementById("cycle-recon-safe"),
+      reconSource: document.getElementById("cycle-recon-source"),
+      reconLocalOrders: document.getElementById("cycle-recon-local-orders"),
+      reconConnectorOrders: document.getElementById("cycle-recon-connector-orders"),
+      reconLocalPosition: document.getElementById("cycle-recon-local-position"),
+      reconConnectorPosition: document.getElementById("cycle-recon-connector-position"),
+      reconReason: document.getElementById("cycle-recon-reason"),
+      relatedRecords: document.getElementById("cycle-related-records"),
+      capitalBefore: document.getElementById("cycle-capital-before"),
+      capitalAfter: document.getElementById("cycle-capital-after"),
+      relatedEvents: document.getElementById("cycle-related-events"),
+      rawSteps: document.getElementById("cycle-raw-steps"),
+      rawCapital: document.getElementById("cycle-raw-capital"),
+      rawEvents: document.getElementById("cycle-raw-events"),
+    };
+
+    const state = {
+      traceId: "",
+      botId: "",
+      symbol: "",
+      summaries: [],
+      currentIndex: -1,
+    };
+
+    function titleText(value) {
+      return String(value || "-")
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (character) => character.toUpperCase());
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatJson(value) {
+      if (value === undefined || value === null) {
+        return "No data available.";
+      }
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch (_error) {
+        return String(value);
+      }
+    }
+
+    function whenFromValue(value) {
+      if (value === undefined || value === null || value === "") {
+        return "-";
+      }
+      if (typeof value === "number") {
+        return new Date(value).toLocaleString();
+      }
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && String(value).trim() !== "") {
+        return new Date(numeric).toLocaleString();
+      }
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleString();
+      }
+      return String(value);
+    }
+
+    function usd(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+        return "-";
+      }
+      return `$${parsed.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+
+    function decimal(value, digits = 4) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+        return "-";
+      }
+      return parsed.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: digits,
+      });
+    }
+
+    function outcomeTone(outcome) {
+      const text = String(outcome || "").toLowerCase();
+      if (text === "risk_rejected" || text === "no_op") {
+        return "warn";
+      }
+      if (text === "failed") {
+        return "error";
+      }
+      if (text.startsWith("accepted_")) {
+        return "ok";
+      }
+      return "info";
+    }
+
+    function setOutcomeBadge(label, tone) {
+      elements.outcome.textContent = label;
+      elements.outcome.className = "badge badge-meta";
+      if (["ok", "warn", "error", "info"].includes(tone)) {
+        elements.outcome.classList.add(tone);
+      }
+    }
+
+    async function requestJson(path) {
+      const response = await fetch(path, { headers: { accept: "application/json" } });
+      const body = await response.text();
+      let payload = null;
+      if (body) {
+        try {
+          payload = JSON.parse(body);
+        } catch (_error) {
+          payload = { error: body };
+        }
+      }
+      if (!response.ok) {
+        const reason = payload && payload.error ? payload.error : `${response.status} ${response.statusText}`;
+        throw new Error(reason);
+      }
+      return payload;
+    }
+
+    function parseRouteContext() {
+      const pathname = window.location.pathname || "";
+      const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+      if (normalized.startsWith("/cycles/") && normalized.length > "/cycles/".length) {
+        state.traceId = decodeURIComponent(normalized.slice("/cycles/".length));
+      }
+      const search = new URL(window.location.href).searchParams;
+      if (!state.traceId) {
+        state.traceId = search.get("trace_id") || "";
+      }
+      state.botId = search.get("bot_id") || "";
+      state.symbol = search.get("symbol") || "";
+    }
+
+    function renderMissing(message) {
+      elements.title.textContent = "Cycle trace unavailable";
+      elements.subtitle.textContent = message;
+      setOutcomeBadge("Unavailable", "warn");
+      elements.traceId.textContent = state.traceId || "-";
+      elements.botId.textContent = state.botId || "-";
+      elements.symbol.textContent = state.symbol || "-";
+      elements.phase.textContent = "-";
+      elements.trigger.textContent = "-";
+      elements.bar.textContent = "-";
+      elements.created.textContent = "-";
+      elements.risk.textContent = "-";
+      elements.rail.innerHTML = `<p class="terminal-note">${escapeHtml(message)}</p>`;
+      elements.highlights.innerHTML = `<p class="terminal-note">${escapeHtml(message)}</p>`;
+      elements.reconSafe.textContent = "-";
+      elements.reconSource.textContent = "-";
+      elements.reconLocalOrders.textContent = "-";
+      elements.reconConnectorOrders.textContent = "-";
+      elements.reconLocalPosition.textContent = "-";
+      elements.reconConnectorPosition.textContent = "-";
+      elements.reconReason.textContent = message;
+      elements.relatedRecords.innerHTML = "";
+      elements.capitalBefore.innerHTML = `<p class="terminal-note">${escapeHtml(message)}</p>`;
+      elements.capitalAfter.innerHTML = `<p class="terminal-note">${escapeHtml(message)}</p>`;
+      elements.relatedEvents.textContent = message;
+      elements.rawSteps.textContent = message;
+      elements.rawCapital.textContent = message;
+      elements.rawEvents.textContent = message;
+      elements.prevButton.disabled = true;
+      elements.nextButton.disabled = true;
+      elements.copyButton.disabled = true;
+    }
+
+    function updateBackLink() {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("trace_id");
+      if (state.botId) {
+        params.set("bot_id", state.botId);
+      }
+      if (state.symbol) {
+        params.set("symbol", state.symbol);
+      }
+      const search = params.toString();
+      elements.backLink.setAttribute("href", search ? `/cycles?${search}` : "/cycles");
+    }
+
+    function renderStepRail(trace) {
+      const execution = trace.execution_step || {};
+      const reconciliation = trace.reconciliation_context && trace.reconciliation_context.latest
+        ? trace.reconciliation_context.latest
+        : null;
+      const executionLabel = execution.fill
+        ? "filled"
+        : execution.order
+          ? "ordered"
+          : "no order";
+      const executionTone = execution.fill ? "ok" : execution.order ? "info" : "warn";
+      const reconciliationTone = reconciliation
+        ? (reconciliation.safe_to_trade ? "ok" : "warn")
+        : "info";
+      const steps = [
+        { label: "Trigger", value: trace.trigger && trace.trigger.trigger_kind, tone: "info" },
+        { label: "Signal", value: trace.signal_step && trace.signal_step.signal, tone: "info" },
+        { label: "Intent", value: trace.intent_step && trace.intent_step.intent, tone: "info" },
+        { label: "Risk", value: trace.risk_step && trace.risk_step.decision, tone: trace.risk_step && trace.risk_step.decision === "rejected" ? "warn" : "ok" },
+        { label: "Execution", value: executionLabel, tone: executionTone },
+        { label: "Position", value: trace.position_step && trace.position_step.has_position_after ? "open" : "flat", tone: "info" },
+        { label: "Reconciliation", value: reconciliation ? (reconciliation.safe_to_trade ? "safe" : "blocked") : "not captured", tone: reconciliationTone },
+      ];
+      elements.rail.innerHTML = "";
+      for (const step of steps) {
+        const card = document.createElement("article");
+        card.className = `cycle-step-chip ${step.tone}`;
+        card.innerHTML = `
+          <span>${escapeHtml(step.label)}</span>
+          <strong>${escapeHtml(titleText(step.value || "-"))}</strong>
+        `;
+        elements.rail.appendChild(card);
+      }
+    }
+
+    function renderHighlights(trace) {
+      const strategyReason = trace.intent_step && trace.intent_step.strategy_rationale
+        ? trace.intent_step.strategy_rationale
+        : "No explicit strategy rationale recorded.";
+      const riskReason = trace.risk_step && trace.risk_step.reason
+        ? trace.risk_step.reason
+        : "No risk rejection reason recorded.";
+      const order = trace.execution_step && trace.execution_step.order ? trace.execution_step.order : null;
+      const fill = trace.execution_step && trace.execution_step.fill ? trace.execution_step.fill : null;
+      const position = trace.position_step || {};
+
+      elements.highlights.innerHTML = `
+        <article class="cycle-highlight-card">
+          <span>Signal</span>
+          <strong>${escapeHtml(titleText(trace.signal_step && trace.signal_step.signal))}</strong>
+          <p>Close ${escapeHtml(decimal(trace.signal_step && trace.signal_step.close, 5))} from ${escapeHtml(trace.trigger && trace.trigger.signal_source ? trace.trigger.signal_source : "unknown source")}.</p>
+        </article>
+        <article class="cycle-highlight-card">
+          <span>Intent</span>
+          <strong>${escapeHtml(titleText(trace.intent_step && trace.intent_step.intent))}</strong>
+          <p>Order quantity ${escapeHtml(decimal(trace.intent_step && trace.intent_step.order_quantity, 6))}. ${escapeHtml(strategyReason)}</p>
+        </article>
+        <article class="cycle-highlight-card">
+          <span>Risk</span>
+          <strong>${escapeHtml(titleText(trace.risk_step && trace.risk_step.decision))}</strong>
+          <p>${escapeHtml(riskReason)} Spread ${escapeHtml(decimal(trace.risk_step && trace.risk_step.observed_spread_bps, 2))} bps, slippage ${escapeHtml(decimal(trace.risk_step && trace.risk_step.estimated_slippage_bps, 2))} bps.</p>
+        </article>
+        <article class="cycle-highlight-card">
+          <span>Execution + Position</span>
+          <strong>${escapeHtml(fill ? "Filled" : order ? "Order Submitted" : "No Order")}</strong>
+          <p>${escapeHtml(order ? `Order ${order.client_order_id}` : "No order id captured")}. Position after ${escapeHtml(position.has_position_after ? `open ${decimal(position.quantity_after, 6)}` : "flat")}, realized ${escapeHtml(usd(position.realized_pnl_usd))}.</p>
+        </article>
+      `;
+    }
+
+    function renderCapital(target, capitalState) {
+      if (!capitalState) {
+        target.innerHTML = '<p class="terminal-note">No capital snapshot captured.</p>';
+        return;
+      }
+
+      const blocks = [];
+      if (capitalState.account) {
+        const account = capitalState.account;
+        blocks.push(`
+          <article class="cycle-capital-card">
+            <h4>Account ${escapeHtml(account.id || "-")}</h4>
+            <div class="detail-list">
+              <div class="detail-row"><span>Effective Cap</span><strong>${escapeHtml(usd(account.effective_cap_usd))}</strong></div>
+              <div class="detail-row"><span>Tradeable Room</span><strong>${escapeHtml(usd(account.tradeable_open_room_usd))}</strong></div>
+              <div class="detail-row"><span>Blocked Room</span><strong>${escapeHtml(usd(account.blocked_open_room_usd))}</strong></div>
+              <div class="detail-row"><span>Committed</span><strong>${escapeHtml(usd(account.total_committed_notional_usd))}</strong></div>
+            </div>
+          </article>
+        `);
+      }
+      if (capitalState.bot) {
+        const bot = capitalState.bot;
+        blocks.push(`
+          <article class="cycle-capital-card">
+            <h4>Bot ${escapeHtml(bot.id || "-")}</h4>
+            <div class="detail-list">
+              <div class="detail-row"><span>Allocated</span><strong>${escapeHtml(usd(bot.allocated_usd))}</strong></div>
+              <div class="detail-row"><span>Tradeable Room</span><strong>${escapeHtml(usd(bot.tradeable_open_room_usd))}</strong></div>
+              <div class="detail-row"><span>Blocked Room</span><strong>${escapeHtml(usd(bot.blocked_open_room_usd))}</strong></div>
+              <div class="detail-row"><span>Committed</span><strong>${escapeHtml(usd(bot.total_committed_notional_usd))}</strong></div>
+            </div>
+          </article>
+        `);
+      }
+      if (capitalState.lane) {
+        const lane = capitalState.lane;
+        const owner = lane.owner || {};
+        blocks.push(`
+          <article class="cycle-capital-card">
+            <h4>Lane ${escapeHtml(owner.symbol || "-")}</h4>
+            <div class="detail-list">
+              <div class="detail-row"><span>Attributed Notional</span><strong>${escapeHtml(usd(lane.attributed_open_notional_usd))}</strong></div>
+              <div class="detail-row"><span>Reserved Notional</span><strong>${escapeHtml(usd(lane.reserved_open_notional_usd))}</strong></div>
+              <div class="detail-row"><span>Total Committed</span><strong>${escapeHtml(usd(lane.total_committed_notional_usd))}</strong></div>
+            </div>
+          </article>
+        `);
+      }
+
+      target.innerHTML = blocks.length > 0
+        ? blocks.join("")
+        : '<p class="terminal-note">No capital snapshot captured.</p>';
+    }
+
+    function renderRelatedRecords(trace) {
+      const records = Array.isArray(trace.related_records) ? trace.related_records : [];
+      elements.relatedRecords.innerHTML = "";
+      if (records.length === 0) {
+        const item = document.createElement("li");
+        item.className = "difference-item";
+        item.textContent = "No related records captured for this cycle.";
+        elements.relatedRecords.appendChild(item);
+        return;
+      }
+      for (const record of records) {
+        const item = document.createElement("li");
+        item.className = "difference-item";
+        item.textContent = `${record.family}: ${record.label}${record.client_order_id ? ` | order ${record.client_order_id}` : ""}${record.bar_timestamp ? ` | ${record.bar_timestamp}` : ""}`;
+        elements.relatedRecords.appendChild(item);
+      }
+    }
+
+    function renderReconciliation(trace) {
+      const snapshot = trace.reconciliation_context && trace.reconciliation_context.latest
+        ? trace.reconciliation_context.latest
+        : null;
+      if (!snapshot) {
+        elements.reconSafe.textContent = "-";
+        elements.reconSource.textContent = "-";
+        elements.reconLocalOrders.textContent = "-";
+        elements.reconConnectorOrders.textContent = "-";
+        elements.reconLocalPosition.textContent = "-";
+        elements.reconConnectorPosition.textContent = "-";
+        elements.reconReason.textContent = "No reconciliation context recorded.";
+        return;
+      }
+      elements.reconSafe.textContent = snapshot.safe_to_trade ? "YES" : "NO";
+      elements.reconSource.textContent = snapshot.source || "-";
+      elements.reconLocalOrders.textContent = String(snapshot.local_open_orders ?? "-");
+      elements.reconConnectorOrders.textContent = String(snapshot.connector_open_orders ?? "-");
+      elements.reconLocalPosition.textContent = snapshot.local_has_position ? "YES" : "NO";
+      elements.reconConnectorPosition.textContent = snapshot.connector_has_position ? "YES" : "NO";
+      elements.reconReason.textContent = snapshot.reason || "No reason provided.";
+    }
+
+    function renderTrace(trace) {
+      const summary = trace.summary || {};
+      const tone = outcomeTone(summary.outcome);
+
+      elements.title.textContent = `${summary.symbol || "-"} ${titleText(summary.outcome || "cycle")}`;
+      elements.subtitle.textContent = `Trace ${summary.trace_id || "-"} for ${summary.bot_id || "-"}.`;
+      setOutcomeBadge(titleText(summary.outcome || "unknown"), tone);
+
+      elements.traceId.textContent = summary.trace_id || "-";
+      elements.botId.textContent = summary.bot_id || "-";
+      elements.symbol.textContent = summary.symbol || "-";
+      elements.phase.textContent = titleText(summary.phase || (trace.trigger && trace.trigger.phase) || "-");
+      elements.trigger.textContent = titleText(summary.trigger_kind || (trace.trigger && trace.trigger.trigger_kind) || "-");
+      elements.bar.textContent = whenFromValue(summary.bar_timestamp || (trace.trigger && trace.trigger.bar_timestamp));
+      elements.created.textContent = whenFromValue(summary.created_at_ms);
+      elements.risk.textContent = titleText(trace.risk_step && trace.risk_step.decision);
+
+      renderStepRail(trace);
+      renderHighlights(trace);
+      renderReconciliation(trace);
+      renderRelatedRecords(trace);
+
+      renderCapital(elements.capitalBefore, trace.capital_before);
+      renderCapital(elements.capitalAfter, trace.capital_after);
+
+      elements.relatedEvents.textContent = formatJson(trace.related_events || []);
+      elements.rawSteps.textContent = formatJson({
+        trigger: trace.trigger,
+        signal_step: trace.signal_step,
+        intent_step: trace.intent_step,
+        risk_step: trace.risk_step,
+        execution_step: trace.execution_step,
+        position_step: trace.position_step,
+        reconciliation_context: trace.reconciliation_context,
+      });
+      elements.rawCapital.textContent = formatJson({
+        capital_before: trace.capital_before,
+        capital_after: trace.capital_after,
+      });
+      elements.rawEvents.textContent = formatJson(trace.related_events || []);
+      elements.copyButton.disabled = false;
+    }
+
+    function updateNavigator() {
+      const hasPrev = state.currentIndex >= 0 && state.currentIndex < state.summaries.length - 1;
+      const hasNext = state.currentIndex > 0;
+      elements.prevButton.disabled = !hasPrev;
+      elements.nextButton.disabled = !hasNext;
+    }
+
+    function navigateToIndex(index) {
+      if (index < 0 || index >= state.summaries.length) {
+        return;
+      }
+      const summary = state.summaries[index];
+      if (!summary || !summary.trace_id) {
+        return;
+      }
+      const params = new URLSearchParams(window.location.search);
+      params.set("bot_id", state.botId);
+      if (summary.symbol) {
+        params.set("symbol", summary.symbol);
+      }
+      params.delete("trace_id");
+      const search = params.toString();
+      const nextUrl = `/cycles/${encodeURIComponent(summary.trace_id)}${search ? `?${search}` : ""}`;
+      window.location.assign(nextUrl);
+    }
+
+    async function loadNavigatorSummaries() {
+      if (!state.botId) {
+        state.summaries = [];
+        state.currentIndex = -1;
+        updateNavigator();
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("limit", "100");
+      if (state.symbol) {
+        params.set("symbol", state.symbol);
+      }
+      try {
+        state.summaries = await requestJson(`/v1/bots/${encodeURIComponent(state.botId)}/cycles?${params.toString()}`);
+      } catch (_error) {
+        state.summaries = [];
+      }
+      state.currentIndex = state.summaries.findIndex((entry) => entry && entry.trace_id === state.traceId);
+      updateNavigator();
+    }
+
+    async function loadTrace() {
+      if (!state.traceId || !state.botId) {
+        renderMissing("This page needs both trace_id and bot_id. Open a cycle from the list view.");
+        return;
+      }
+      try {
+        const trace = await requestJson(`/v1/bots/${encodeURIComponent(state.botId)}/cycles/${encodeURIComponent(state.traceId)}`);
+        renderTrace(trace);
+      } catch (error) {
+        renderMissing(error instanceof Error ? error.message : "Failed to load cycle trace.");
+      }
+    }
+
+    async function initialize() {
+      parseRouteContext();
+      updateBackLink();
+      await Promise.all([loadTrace(), loadNavigatorSummaries()]);
+    }
+
+    elements.prevButton.addEventListener("click", () => {
+      navigateToIndex(state.currentIndex + 1);
+    });
+
+    elements.nextButton.addEventListener("click", () => {
+      navigateToIndex(state.currentIndex - 1);
+    });
+
+    elements.copyButton.addEventListener("click", async () => {
+      if (!state.traceId || !navigator.clipboard) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(state.traceId);
+        const original = elements.copyButton.textContent;
+        elements.copyButton.textContent = "Copied";
+        window.setTimeout(() => {
+          elements.copyButton.textContent = original;
+        }, 1200);
+      } catch (_error) {
+      }
+    });
+
+    initialize();
+  })();
+</script>
+)}

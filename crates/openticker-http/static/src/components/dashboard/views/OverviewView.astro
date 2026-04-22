@@ -1,0 +1,152 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "overview";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="overview" hidden={!isActive}>
+  <article class="panel panel-section feed-monitor-panel">
+    <div class="panel-head">
+      <div>
+        <h3>Runtime Pulse</h3>
+        <p>Fast operator read of service readiness, bot distribution, and connector availability.</p>
+      </div>
+    </div>
+    <div class="metric-grid">
+      <article class="metric-card"><span>Total Bots</span><strong id="stat-total">-</strong><p>Configured bot definitions currently loaded.</p></article>
+      <article class="metric-card"><span>Running</span><strong id="stat-running">-</strong><p>Instances actively processing bars.</p></article>
+      <article class="metric-card"><span>Paused</span><strong id="stat-paused">-</strong><p>Loaded but intentionally halted from trading.</p></article>
+      <article class="metric-card"><span>Reconciling</span><strong id="stat-reconciling">-</strong><p>Instances inside reconciliation workflows.</p></article>
+      <article class="metric-card"><span>Stopped</span><strong id="stat-stopped">-</strong><p>Definitions not currently supervised.</p></article>
+      <article class="metric-card"><span>Recon Blocked</span><strong id="stat-blocked">-</strong><p>Instances prevented from new trading until resolved.</p></article>
+      <article class="metric-card"><span>Warmup Ready</span><strong id="stat-warmup-ready">-</strong><p>Instances with confirmed-history warmup complete.</p></article>
+      <article class="metric-card"><span>Warmup Pending</span><strong id="stat-warmup-pending">-</strong><p>Instances still ingesting confirmed history before they can trade.</p></article>
+      <article class="metric-card"><span>Warmup Failed</span><strong id="stat-warmup-failed">-</strong><p>Instances waiting on backfill recovery or live confirmed catch-up.</p></article>
+      <article class="metric-card"><span>Kill Switch</span><strong id="stat-kill">-</strong><p>Emergency stop state for new intents.</p></article>
+      <article class="metric-card"><span>Service Ready</span><strong id="stat-ready">-</strong><p>Readiness based on runtime initialization.</p></article>
+      <article class="metric-card"><span>Connectors Up</span><strong id="stat-connectors">-</strong><p>Connected adapters versus total visible adapters.</p></article>
+    </div>
+  </article>
+
+  <div class="grid-two">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Execution Window</h3>
+          <p>Windowed order, fill, and turnover markers from the live dashboard feed cache, plus authoritative realized P/L from runtime bot summaries.</p>
+        </div>
+      </div>
+      <div class="metric-grid">
+        <article class="metric-card"><span>Orders Seen</span><strong id="perf-orders-seen">-</strong><p>Latest order records visible in the activity cache.</p></article>
+        <article class="metric-card"><span>Submitted Orders</span><strong id="perf-orders-submitted">-</strong><p>Orders marked <code>submitted</code>.</p></article>
+        <article class="metric-card"><span>Fills Seen</span><strong id="perf-fills-seen">-</strong><p>Latest fills across the runtime event window.</p></article>
+        <article class="metric-card"><span>Recent Fill Turnover</span><strong id="perf-fill-turnover">-</strong><p>Sum of <code>price x quantity</code> over visible fills in the current feed window.</p></article>
+        <article class="metric-card"><span>Current Exposure</span><strong id="perf-current-exposure">-</strong><p>Current open notional reserved across account ledgers.</p></article>
+        <article class="metric-card"><span>Realized P/L</span><strong id="perf-realized-pnl">-</strong><p id="perf-realized-note">Cumulative net realized P/L from runtime bot summaries.</p></article>
+        <article class="metric-card"><span>Open Position Bots</span><strong id="perf-open-positions">-</strong><p>Bots currently reporting an open position in bot summaries.</p></article>
+      </div>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Observability + Surface</h3>
+          <p>Latency markers, risk rejects, and HTTP control-plane coverage signals.</p>
+        </div>
+        <span id="obs-samples" class="badge">No Samples</span>
+      </div>
+      <div class="metric-grid">
+        <article class="metric-card"><span>Risk Rejects</span><strong id="obs-risk-rejects">-</strong><p>Total policy rejects since service boot.</p></article>
+        <article class="metric-card"><span>Resilience Windows</span><strong id="obs-resilience-windows">-</strong><p>Connectors inside reconnect or throttle windows.</p></article>
+        <article class="metric-card"><span>Process Latency Avg</span><strong id="obs-process-avg">-</strong><p>Average <code>process_bar</code> duration.</p></article>
+        <article class="metric-card"><span>Process Latency Max</span><strong id="obs-process-max">-</strong><p>Highest observed <code>process_bar</code> duration.</p></article>
+        <article class="metric-card"><span>Execution Latency Avg</span><strong id="obs-exec-avg">-</strong><p>Average execution submission duration.</p></article>
+        <article class="metric-card"><span>Execution Latency Max</span><strong id="obs-exec-max">-</strong><p>Highest execution submission duration.</p></article>
+      </div>
+      <div class="panel-divider"></div>
+      <div class="metric-grid">
+        <article class="metric-card"><span>Healthz</span><strong id="api-health">-</strong><p>Basic process liveness.</p></article>
+        <article class="metric-card"><span>Readyz</span><strong id="api-ready">-</strong><p>Runtime readiness state.</p></article>
+        <article class="metric-card"><span>Metrics Pulse</span><strong id="api-metrics">-</strong><p>Prometheus endpoint summary.</p></article>
+        <article class="metric-card"><span>OpenAPI Paths</span><strong id="api-openapi">-</strong><p>Generated route inventory coverage.</p></article>
+      </div>
+      <p id="api-note" class="terminal-note">Control-plane probes not sampled yet.</p>
+    </article>
+  </div>
+
+  <div class="grid-two">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Operational Charts</h3>
+          <p>State mix, end-to-end activity load, and background latency pressure.</p>
+        </div>
+      </div>
+      <div class="chart-grid">
+        <section class="panel-section" style="padding:0; gap:10px;">
+          <h4 class="panel-title">Bot State Map</h4>
+          <div id="state-breakdown" class="bar-list"></div>
+        </section>
+        <section class="panel-section" style="padding:0; gap:10px;">
+          <h4 class="panel-title">Latency Radar</h4>
+          <div id="latency-breakdown" class="bar-list"></div>
+        </section>
+        <section class="panel-section" style="padding:0; gap:10px;">
+          <h4 class="panel-title">Activity Load</h4>
+          <div id="activity-breakdown" class="bar-list"></div>
+        </section>
+      </div>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Desk Blotter</h3>
+          <p>Most recent high-signal journal records from risk, orders, fills, positions, and reconciliation.</p>
+        </div>
+        <span id="overview-blotter-count" class="badge">0 items</span>
+      </div>
+      <ul id="overview-blotter-list" class="overview-list"></ul>
+    </article>
+  </div>
+
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Portfolio + Ledger</h3>
+        <p>Detailed account, bot, and lane ownership snapshots have moved to a dedicated page.</p>
+      </div>
+      <a href="/portfolio" class="toolbar-button primary">Open Portfolio Page</a>
+    </div>
+    <p class="terminal-note">Use the Portfolio page for the full ledger tables and raw snapshot payload.</p>
+  </article>
+
+  <div class="grid-two">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Managed Config Snapshot</h3>
+          <p>Environment, storage, risk catalog, and live-gate posture from the effective config.</p>
+        </div>
+      </div>
+      <div class="metric-grid">
+        <article class="metric-card"><span>Accounts</span><strong id="diag-accounts">-</strong><p>Managed account entries.</p></article>
+        <article class="metric-card"><span>Risk Profiles</span><strong id="diag-risk">-</strong><p>Configured reusable risk policies.</p></article>
+        <article class="metric-card"><span>Bots</span><strong id="diag-instances">-</strong><p>Managed bot definitions.</p></article>
+        <article class="metric-card"><span>Environment</span><strong id="diag-environment">-</strong><p>Service environment label.</p></article>
+        <article class="metric-card"><span>Storage</span><strong id="diag-storage">-</strong><p>Runtime journal backend.</p></article>
+        <article class="metric-card"><span>Live Gate</span><strong id="diag-live-gate">-</strong><p>Explicit live-mode guard requirement.</p></article>
+      </div>
+      <p id="diag-note" class="terminal-note">Managed config not loaded yet.</p>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Service Snapshot</h3>
+          <p>Raw service status payload for quick operator inspection.</p>
+        </div>
+      </div>
+      <pre id="overview-service-terminal" class="terminal small">Waiting for service payload.</pre>
+    </article>
+  </div>
+</section>

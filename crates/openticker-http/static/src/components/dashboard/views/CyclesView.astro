@@ -1,0 +1,478 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "cycles";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="cycles" hidden={!isActive}>
+  <div class="cycles-shell">
+    <article class="panel panel-section cycles-hero-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Cycle Inspector</p>
+          <h3>Trace Discovery</h3>
+          <p>Scan recently evaluated cycles, tune filters, and open a dedicated trace workspace when one needs deep inspection.</p>
+        </div>
+        <span id="cycles-list-count" class="badge">0 cycles</span>
+      </div>
+      <div class="cycles-kpi-grid">
+        <article class="cycles-kpi-card">
+          <span>Loaded</span>
+          <strong id="cycles-kpi-total">0</strong>
+          <p>Cycle traces in current filter scope.</p>
+        </article>
+        <article class="cycles-kpi-card">
+          <span>Accepted</span>
+          <strong id="cycles-kpi-accepted">0</strong>
+          <p>Cycles that passed risk and reached execution intent.</p>
+        </article>
+        <article class="cycles-kpi-card">
+          <span>Risk Rejected</span>
+          <strong id="cycles-kpi-rejected">0</strong>
+          <p>Cycles blocked before execution due to risk policy.</p>
+        </article>
+        <article class="cycles-kpi-card">
+          <span>Newest Bar</span>
+          <strong id="cycles-kpi-latest">-</strong>
+          <p>Most recent bar timestamp in the visible list.</p>
+        </article>
+      </div>
+    </article>
+
+    <article class="panel panel-section cycles-filter-panel">
+      <div class="activity-filter-grid cycles-filter-grid">
+        <label class="field-block">
+          <span>Bot</span>
+          <select id="cycles-bot-select">
+            <option value="">Select a bot</option>
+          </select>
+        </label>
+        <label class="field-block">
+          <span>Ticker</span>
+          <select id="cycles-symbol-select">
+            <option value="">All tickers</option>
+          </select>
+        </label>
+        <label class="field-block">
+          <span>Phase</span>
+          <select id="cycles-phase-select">
+            <option value="">All phases</option>
+            <option value="preview">preview</option>
+            <option value="confirmed">confirmed</option>
+          </select>
+        </label>
+        <label class="field-block">
+          <span>Outcome</span>
+          <select id="cycles-outcome-select">
+            <option value="">All outcomes</option>
+            <option value="no_op">no_op</option>
+            <option value="risk_rejected">risk_rejected</option>
+            <option value="accepted_no_fill">accepted_no_fill</option>
+            <option value="accepted_partially_filled">accepted_partially_filled</option>
+            <option value="accepted_filled">accepted_filled</option>
+            <option value="failed">failed</option>
+          </select>
+        </label>
+        <label class="field-block activity-search-field">
+          <span>Search</span>
+          <input id="cycles-search" type="search" placeholder="Trace id, signal, intent, risk, outcome">
+        </label>
+        <div class="activity-filter-actions">
+          <button type="button" class="toolbar-button" id="cycles-reload-button">Reload</button>
+        </div>
+      </div>
+      <p id="cycles-list-note" class="terminal-note">Pick a bot to load cycle traces.</p>
+    </article>
+
+    <article class="panel panel-section activity-records-panel cycles-list-panel">
+      <div class="panel-head">
+        <div>
+          <h3>Cycle Traces</h3>
+          <p>Each card captures one signal-to-execution loop. Open a card to inspect full rationale, capital context, and linked events.</p>
+        </div>
+      </div>
+      <ul id="cycles-list" class="cycles-list-grid"></ul>
+    </article>
+  </div>
+</section>
+
+{isActive && (
+<script is:inline>
+  (() => {
+    const page = document.querySelector('[data-page="cycles"]');
+    if (!page) {
+      return;
+    }
+
+    const elements = {
+      botSelect: document.getElementById("cycles-bot-select"),
+      symbolSelect: document.getElementById("cycles-symbol-select"),
+      phaseSelect: document.getElementById("cycles-phase-select"),
+      outcomeSelect: document.getElementById("cycles-outcome-select"),
+      searchInput: document.getElementById("cycles-search"),
+      reloadButton: document.getElementById("cycles-reload-button"),
+      listCount: document.getElementById("cycles-list-count"),
+      listNote: document.getElementById("cycles-list-note"),
+      list: document.getElementById("cycles-list"),
+      kpiTotal: document.getElementById("cycles-kpi-total"),
+      kpiAccepted: document.getElementById("cycles-kpi-accepted"),
+      kpiRejected: document.getElementById("cycles-kpi-rejected"),
+      kpiLatest: document.getElementById("cycles-kpi-latest"),
+    };
+
+    const state = {
+      bots: [],
+      summaries: [],
+      visible: [],
+    };
+
+    function titleText(value) {
+      return String(value || "-")
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (character) => character.toUpperCase());
+    }
+
+    function whenFromValue(value) {
+      if (value === undefined || value === null || value === "") {
+        return "-";
+      }
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleString();
+      }
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function outcomeTone(outcome) {
+      const text = String(outcome || "").toLowerCase();
+      if (text === "risk_rejected" || text === "no_op") {
+        return "warn";
+      }
+      if (text === "failed") {
+        return "error";
+      }
+      if (text.startsWith("accepted_")) {
+        return "ok";
+      }
+      return "info";
+    }
+
+    function selectedBotSummary() {
+      return state.bots.find((entry) => entry && entry.id === elements.botSelect.value) || null;
+    }
+
+    async function requestJson(path) {
+      const response = await fetch(path, { headers: { accept: "application/json" } });
+      const body = await response.text();
+      let payload = null;
+      if (body) {
+        try {
+          payload = JSON.parse(body);
+        } catch (_error) {
+          payload = { error: body };
+        }
+      }
+      if (!response.ok) {
+        const reason = payload && payload.error ? payload.error : `${response.status} ${response.statusText}`;
+        throw new Error(reason);
+      }
+      return payload;
+    }
+
+    function setUrlSearch() {
+      const url = new URL(window.location.href);
+      if (elements.botSelect.value) {
+        url.searchParams.set("bot_id", elements.botSelect.value);
+      } else {
+        url.searchParams.delete("bot_id");
+      }
+      if (elements.symbolSelect.value) {
+        url.searchParams.set("symbol", elements.symbolSelect.value);
+      } else {
+        url.searchParams.delete("symbol");
+      }
+      if (elements.phaseSelect.value) {
+        url.searchParams.set("phase", elements.phaseSelect.value);
+      } else {
+        url.searchParams.delete("phase");
+      }
+      if (elements.outcomeSelect.value) {
+        url.searchParams.set("outcome", elements.outcomeSelect.value);
+      } else {
+        url.searchParams.delete("outcome");
+      }
+      if (elements.searchInput.value.trim()) {
+        url.searchParams.set("q", elements.searchInput.value.trim());
+      } else {
+        url.searchParams.delete("q");
+      }
+      url.searchParams.delete("trace_id");
+      window.history.replaceState({}, "", url);
+    }
+
+    function buildDetailUrl(summary) {
+      const traceId = summary && summary.trace_id ? String(summary.trace_id) : "";
+      if (!traceId) {
+        return "";
+      }
+      const search = new URLSearchParams();
+      if (elements.botSelect.value) {
+        search.set("bot_id", elements.botSelect.value);
+      }
+      const symbol = summary && summary.symbol ? String(summary.symbol).trim() : "";
+      if (symbol) {
+        search.set("symbol", symbol);
+      }
+      if (elements.phaseSelect.value) {
+        search.set("phase", elements.phaseSelect.value);
+      }
+      if (elements.outcomeSelect.value) {
+        search.set("outcome", elements.outcomeSelect.value);
+      }
+      if (elements.searchInput.value.trim()) {
+        search.set("q", elements.searchInput.value.trim());
+      }
+      return `/cycles/${encodeURIComponent(traceId)}?${search.toString()}`;
+    }
+
+    function openCycle(summary) {
+      const nextUrl = buildDetailUrl(summary);
+      if (!nextUrl) {
+        return;
+      }
+      window.location.assign(nextUrl);
+    }
+
+    function populateBotOptions() {
+      const selected = elements.botSelect.value;
+      elements.botSelect.innerHTML = '<option value="">Select a bot</option>';
+      for (const bot of state.bots) {
+        const option = document.createElement("option");
+        option.value = bot.id;
+        option.textContent = bot.id;
+        elements.botSelect.appendChild(option);
+      }
+      const searchBot = new URL(window.location.href).searchParams.get("bot_id") || "";
+      elements.botSelect.value = selected || searchBot || (state.bots[0] ? state.bots[0].id : "");
+    }
+
+    function populateSymbolOptions() {
+      const bot = selectedBotSummary();
+      const selected = elements.symbolSelect.value;
+      const symbols = bot && Array.isArray(bot.symbols) && bot.symbols.length > 0
+        ? bot.symbols
+        : bot && bot.symbol
+          ? [bot.symbol]
+          : [];
+      elements.symbolSelect.innerHTML = '<option value="">All tickers</option>';
+      for (const symbol of symbols) {
+        const option = document.createElement("option");
+        option.value = symbol;
+        option.textContent = symbol;
+        elements.symbolSelect.appendChild(option);
+      }
+      const searchSymbol = new URL(window.location.href).searchParams.get("symbol") || "";
+      elements.symbolSelect.value = selected || searchSymbol || "";
+    }
+
+    function applySearchFilter() {
+      const query = elements.searchInput.value.trim().toLowerCase();
+      if (!query) {
+        state.visible = state.summaries.slice();
+        return;
+      }
+      state.visible = state.summaries.filter((entry) => {
+        if (!entry) {
+          return false;
+        }
+        const haystack = [
+          entry.trace_id,
+          entry.symbol,
+          entry.signal,
+          entry.intent,
+          entry.risk_decision,
+          entry.outcome,
+          entry.phase,
+          entry.trigger_kind,
+          entry.bar_timestamp,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+
+    function renderKpis() {
+      const accepted = state.visible.filter((entry) => String(entry.outcome || "").startsWith("accepted_")).length;
+      const rejected = state.visible.filter((entry) => String(entry.outcome || "") === "risk_rejected").length;
+      let newestBar = "-";
+      if (state.visible.length > 0) {
+        const sorted = state.visible
+          .map((entry) => entry && entry.bar_timestamp ? String(entry.bar_timestamp) : "")
+          .filter(Boolean)
+          .sort((left, right) => right.localeCompare(left));
+        newestBar = sorted.length > 0 ? whenFromValue(sorted[0]) : "-";
+      }
+      elements.kpiTotal.textContent = String(state.visible.length);
+      elements.kpiAccepted.textContent = String(accepted);
+      elements.kpiRejected.textContent = String(rejected);
+      elements.kpiLatest.textContent = newestBar;
+    }
+
+    function renderSummaries() {
+      elements.list.innerHTML = "";
+      elements.listCount.textContent = `${state.visible.length} cycles`;
+      renderKpis();
+      if (!elements.botSelect.value) {
+        elements.listNote.textContent = "Pick a bot to load cycle traces.";
+        const item = document.createElement("li");
+        item.className = "cycle-empty";
+        item.textContent = "Choose a bot to begin.";
+        elements.list.appendChild(item);
+        return;
+      }
+      if (state.visible.length === 0) {
+        elements.listNote.textContent = "No cycle traces matched the current filters.";
+        const item = document.createElement("li");
+        item.className = "cycle-empty";
+        item.textContent = "No cycle traces matched these filters. Try widening your window.";
+        elements.list.appendChild(item);
+        return;
+      }
+
+      elements.listNote.textContent = `Showing ${state.visible.length} cycles for ${elements.botSelect.value}.`;
+      for (const summary of state.visible) {
+        const tone = outcomeTone(summary.outcome);
+        const item = document.createElement("li");
+        item.className = `cycle-card ${tone}`;
+        item.innerHTML = `
+          <div class="cycle-card-top">
+            <div>
+              <h4>${escapeHtml(summary.symbol || "-")}</h4>
+              <p>${escapeHtml(titleText(summary.signal || "-"))} -> ${escapeHtml(titleText(summary.intent || "-"))} -> ${escapeHtml(titleText(summary.risk_decision || "-"))}</p>
+            </div>
+            <span class="badge badge-meta ${tone}">${escapeHtml(titleText(summary.outcome || "unknown"))}</span>
+          </div>
+          <p class="cycle-trace-id"><code>${escapeHtml(summary.trace_id || "-")}</code></p>
+          <div class="cycle-meta-row">
+            <span>Phase ${escapeHtml(titleText(summary.phase || "-"))}</span>
+            <span>Trigger ${escapeHtml(titleText(summary.trigger_kind || "-"))}</span>
+            <span>Bar ${escapeHtml(whenFromValue(summary.bar_timestamp))}</span>
+          </div>
+          <div class="cycle-card-actions">
+            <button type="button" class="toolbar-button primary" data-open-trace="${escapeHtml(summary.trace_id || "")}">Inspect Cycle</button>
+          </div>
+        `;
+        elements.list.appendChild(item);
+      }
+    }
+
+    async function loadCycles() {
+      if (!elements.botSelect.value) {
+        state.summaries = [];
+        state.visible = [];
+        renderSummaries();
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("limit", "100");
+      if (elements.symbolSelect.value) {
+        params.set("symbol", elements.symbolSelect.value);
+      }
+      if (elements.phaseSelect.value) {
+        params.set("phase", elements.phaseSelect.value);
+      }
+      if (elements.outcomeSelect.value) {
+        params.set("outcome", elements.outcomeSelect.value);
+      }
+      setUrlSearch();
+      try {
+        state.summaries = await requestJson(`/v1/bots/${encodeURIComponent(elements.botSelect.value)}/cycles?${params.toString()}`);
+        applySearchFilter();
+        renderSummaries();
+
+        const legacyTraceId = new URL(window.location.href).searchParams.get("trace_id") || "";
+        if (legacyTraceId) {
+          const selected = state.summaries.find((entry) => entry && entry.trace_id === legacyTraceId);
+          if (selected) {
+            openCycle(selected);
+          }
+        }
+      } catch (error) {
+        state.summaries = [];
+        state.visible = [];
+        elements.listCount.textContent = "0 cycles";
+        elements.listNote.textContent = error instanceof Error ? error.message : "Failed to load cycle traces.";
+        renderSummaries();
+      }
+    }
+
+    async function initialize() {
+      try {
+        state.bots = await requestJson("/v1/bots?limit=1000");
+      } catch (error) {
+        elements.listNote.textContent = error instanceof Error ? error.message : "Failed to load bot list.";
+        renderSummaries();
+        return;
+      }
+
+      const search = new URL(window.location.href).searchParams;
+      elements.phaseSelect.value = search.get("phase") || "";
+      elements.outcomeSelect.value = search.get("outcome") || "";
+      elements.searchInput.value = search.get("q") || "";
+
+      populateBotOptions();
+      populateSymbolOptions();
+      await loadCycles();
+    }
+
+    elements.botSelect.addEventListener("change", async () => {
+      populateSymbolOptions();
+      await loadCycles();
+    });
+    elements.symbolSelect.addEventListener("change", async () => {
+      await loadCycles();
+    });
+    elements.phaseSelect.addEventListener("change", async () => {
+      await loadCycles();
+    });
+    elements.outcomeSelect.addEventListener("change", async () => {
+      await loadCycles();
+    });
+    elements.searchInput.addEventListener("input", () => {
+      setUrlSearch();
+      applySearchFilter();
+      renderSummaries();
+    });
+    elements.reloadButton.addEventListener("click", async () => {
+      await loadCycles();
+    });
+    elements.list.addEventListener("click", (event) => {
+      const button = event.target instanceof HTMLElement ? event.target.closest("button[data-open-trace]") : null;
+      if (!button) {
+        return;
+      }
+      const traceId = button.dataset.openTrace || "";
+      if (!traceId) {
+        return;
+      }
+      const summary = state.summaries.find((entry) => entry && entry.trace_id === traceId);
+      if (!summary) {
+        return;
+      }
+      openCycle(summary);
+    });
+
+    initialize();
+  })();
+</script>
+)}

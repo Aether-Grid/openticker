@@ -1,0 +1,8 @@
+id = "crypto-default"
+max_daily_loss_pct = 2.5
+max_open_positions = 50
+max_order_notional_usd = 1000.0
+max_spread_bps = 25
+max_slippage_bps = 40
+stale_data_ms = 30000
+cooldown_after_reject_ms = 15000

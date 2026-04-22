@@ -1,0 +1,72 @@
+# Consensus bot template.
+
+id = "crypto-basket-consensus-demo"
+enabled = true
+allow_live = false
+market = "crypto"
+symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "PEPEUSDT"]
+# Each symbol runs as an independent runtime lane under this bot.
+timeframe = "5m"
+account = "binance-demo"
+data_connector = "binance"
+execution_connector = "binance"
+strategy = "consensus"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 1000
+
+# Optional warmup override.
+# warmup_target_bars = 300
+
+[[indicators]]
+id = "primary-1"
+type = "sma_crossover"
+enabled = true
+role = "primary_signal"
+signal_policy = "confirmed_required"
+weight = 1.0
+params = { fast_length = 10, slow_length = 30 }
+
+[indicators.metadata_filters.entry]
+# allowed_strengths = ["strong"]
+
+[indicators.metadata_filters.exit]
+# allowed_strengths = ["normal", "strong"]
+
+[[indicators]]
+id = "filter-1"
+type = "rsi_threshold"
+enabled = true
+role = "filter"
+signal_policy = "confirmed_required"
+weight = 0.5
+params = { period = 14, oversold = 30.0, overbought = 70.0 }
+
+[indicators.metadata_filters.entry]
+# allowed_reason_codes = ["rsi_recovery_from_oversold"]
+
+[indicators.metadata_filters.exit]
+# allowed_reason_codes = ["rsi_drop_from_overbought"]
+
+[budget]
+# Shared across all lanes for this bot.
+pct = 10.0
+
+[risk]
+profile = "crypto-default"
+
+[risk.overrides]
+
+stale_data_ms = 30000
+# max_daily_loss_pct = 2.5
+# max_open_positions = 8
+# target_order_notional_usd = 1500.0
+# max_order_notional_usd = 1500.0
+# max_spread_bps = 25
+# max_slippage_bps = 40
+# cooldown_after_reject_ms = 15000
+
+[execution_constraints]
+# quantity_step = 0.0001
+# min_quantity = 0.0001
+# min_notional_usd = 10.0

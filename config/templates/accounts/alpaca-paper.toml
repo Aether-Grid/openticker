@@ -1,0 +1,27 @@
+# Alpaca paper account template.
+
+id = "alpaca-paper"
+kind = "alpaca"
+mode = "paper"
+api_key_env = "ALPACA_PAPER_KEY"
+api_secret_env = "ALPACA_PAPER_SECRET"
+
+# Optional. Alpaca does not use a passphrase.
+# passphrase_env = ""
+
+# Schema default: false
+use_demo_mode = false
+
+# Schema default: false
+reconciliation_remote_snapshot = true
+
+# Optional. When omitted, the runtime uses connector defaults.
+execution_remote_submission = true
+
+# Optional. Use this only when remote reconciliation or remote execution submission needs an
+# explicit base URL override.
+# reconciliation_base_url = "https://paper-api.alpaca.markets"
+
+# Not supported for alpaca. `cash_balance_assets` is currently binance-only.
+
+total_budget_usd = 10000.0

@@ -1,0 +1,23 @@
+[package]
+name = "openticker-lane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+openticker-config = { path = "../openticker-config" }
+openticker-connectors = { path = "../openticker-connectors" }
+openticker-core = { path = "../openticker-core" }
+openticker-data = { path = "../openticker-data" }
+openticker-execution = { path = "../openticker-execution" }
+openticker-instance = { path = "../openticker-instance" }
+openticker-ledger = { path = "../openticker-ledger" }
+openticker-risk = { path = "../openticker-risk" }
+openticker-strategy = { path = "../openticker-strategy" }
+openticker-trace = { path = "../openticker-trace" }

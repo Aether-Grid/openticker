@@ -1,0 +1,85 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "connectors";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="connectors" hidden={!isActive}>
+  <div class="metric-grid">
+    <article class="metric-card"><span>Total Connectors</span><strong id="connector-total">-</strong><p>Visible runtime connector statuses.</p></article>
+    <article class="metric-card"><span>Connected</span><strong id="connector-up">-</strong><p>Healthy connected adapters.</p></article>
+    <article class="metric-card"><span>Degraded</span><strong id="connector-degraded">-</strong><p>Adapters reporting degraded health.</p></article>
+    <article class="metric-card"><span>Disconnected</span><strong id="connector-down">-</strong><p>Adapters currently unavailable.</p></article>
+    <article class="metric-card"><span>Resilience Windows</span><strong id="connector-windows">-</strong><p>Reconnect or throttle windows currently active.</p></article>
+    <article class="metric-card"><span>Connector Kinds</span><strong id="connector-kinds">-</strong><p>Distinct adapter kinds represented in the runtime.</p></article>
+  </div>
+
+  <div class="grid-two wide-left">
+    <div class="stack">
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Connector Health Map</h3>
+            <p>State distribution across adapter accounts plus resilience pressure indicators.</p>
+          </div>
+        </div>
+        <div id="connector-state-chart" class="bar-list"></div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Runtime Connector Status</h3>
+            <p>Select a connector row to load detailed resilience and capability context on the right.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Kind</th>
+                <th>Mode</th>
+                <th>State</th>
+                <th>Resilience</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody id="connectors-body"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Capability Catalog</h3>
+            <p>Static connector matrix entries exposed by <code>/v1/connectors/matrix</code>.</p>
+          </div>
+        </div>
+        <div id="matrix-grid" class="matrix-grid"></div>
+      </article>
+    </div>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Selected Connector</h3>
+          <p>Account binding, resilience envelope, matched matrix entries, and raw status payload.</p>
+        </div>
+        <span id="connector-selected-pill" class="badge">No selection</span>
+      </div>
+      <div class="detail-list">
+        <div class="detail-row"><span>Account</span><strong id="connector-selected-id">-</strong></div>
+        <div class="detail-row"><span>State</span><strong id="connector-selected-state">-</strong></div>
+        <div class="detail-row"><span>Mode</span><strong id="connector-selected-mode">-</strong></div>
+        <div class="detail-row"><span>Resilience</span><strong id="connector-selected-resilience">-</strong></div>
+        <div class="detail-row"><span>Message</span><strong id="connector-selected-message">-</strong></div>
+      </div>
+      <div>
+        <p class="eyebrow" style="margin-top:0;">Matrix Match</p>
+        <div id="connector-selected-matrix" class="selection-list"></div>
+      </div>
+      <pre id="connector-terminal" class="terminal">Select a connector row to inspect it here.</pre>
+    </article>
+  </div>
+</section>

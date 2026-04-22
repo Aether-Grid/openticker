@@ -1,0 +1,28 @@
+# Binance live account template.
+
+id = "binance-live"
+kind = "binance"
+mode = "live"
+api_key_env = "BINANCE_LIVE_KEY"
+api_secret_env = "BINANCE_LIVE_SECRET"
+
+# Optional. Binance passphrase is usually not used here.
+# passphrase_env = ""
+
+# Schema default: false
+use_demo_mode = false
+
+# Schema default: false
+reconciliation_remote_snapshot = true
+
+# Optional. When omitted, the runtime uses connector defaults.
+execution_remote_submission = true
+
+# Optional. Set when reconciliation or execution is routed through a custom base URL.
+# reconciliation_base_url = "https://api.binance.com"
+
+# Optional. Restrict which quote balances count toward account live-balance budgeting.
+# Allowed assets: USD, USDT, USDC, BUSD, FDUSD
+# cash_balance_assets = ["USDT", "USDC"]
+
+total_budget_usd = 10000.0

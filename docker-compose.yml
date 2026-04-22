@@ -1,0 +1,17 @@
+services:
+  openticker:
+    container_name: openticker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["service", "run", "--config-dir", "/app/config", "--bind", "0.0.0.0:8080"]
+    env_file:
+      - path: ./.env
+        required: false
+      - path: ./config/.env
+        required: false
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./var:/app/var
+    restart: unless-stopped

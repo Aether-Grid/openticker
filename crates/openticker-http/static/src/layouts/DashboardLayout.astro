@@ -1,0 +1,23 @@
+---
+import DashboardScript from "../components/dashboard/DashboardScript.astro";
+import { pageTitle, type DashboardPageId } from "../lib/dashboard/pages";
+import dashboardStyles from "../styles/dashboard.css?raw";
+
+const { currentPage = "overview" } = Astro.props as {
+  currentPage?: DashboardPageId;
+};
+---
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{pageTitle}</title>
+  <style is:inline set:html={dashboardStyles}></style>
+</head>
+<body data-initial-page={currentPage}>
+  <slot />
+  <DashboardScript />
+</body>
+</html>

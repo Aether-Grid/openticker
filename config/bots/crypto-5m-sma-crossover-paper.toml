@@ -1,0 +1,31 @@
+id = "crypto-5m-sma-crossover-paper"
+enabled = true
+allow_live = false
+market = "crypto"
+symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+timeframe = "5m"
+account = "binance-demo"
+data_connector = "binance"
+execution_connector = "binance"
+strategy = "single_indicator_signal"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 1000
+
+[[indicators]]
+id = "trend-1"
+type = "sma_crossover"
+signal_policy = "confirmed_required"
+
+[indicators.params]
+fast_length = 10
+slow_length = 30
+
+[budget]
+pct = 10.0
+
+[risk]
+profile = "crypto-default"
+
+[risk.overrides]
+stale_data_ms = 30000

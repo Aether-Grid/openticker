@@ -1,0 +1,42 @@
+[service]
+environment = "dev"
+data_dir = "./var"
+bot_dir = "./config/bots"
+
+[http]
+enabled = true
+bind = "127.0.0.1:8080"
+request_log = true
+openapi_enabled = true
+openapi_path = "/openapi.json"
+
+[storage]
+kind = "sqlite"
+path = "./var/openticker.db"
+busy_timeout_ms = 5000
+# Schema default: false
+prune_removed_bots_on_startup = false
+
+[observability]
+log_level = "info"
+metrics_enabled = true
+metrics_path = "/metrics"
+
+[safety]
+require_explicit_live_enable = true
+default_start_paused_if_recovery_uncertain = true
+
+[data_plane]
+# Schema default: 5000
+default_polling_interval_ms = 5000
+# Schema default: 500
+default_retention = 500
+
+# Optional always-on stream watchlist entries.
+#
+# [[data_plane.watchlist]]
+# account = "binance-demo"
+# symbol = "BTCUSDT"
+# timeframe = "1m"
+# polling_interval_ms = 5000
+# retention = 500

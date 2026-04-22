@@ -1,0 +1,8 @@
+id = "alpaca-paper"
+kind = "alpaca"
+mode = "paper"
+api_key_env = "ALPACA_PAPER_KEY"
+api_secret_env = "ALPACA_PAPER_SECRET"
+reconciliation_remote_snapshot = true
+execution_remote_submission = true
+total_budget_usd = 10000.0

@@ -1,0 +1,14 @@
+# Equities risk profile template.
+
+id = "equities-default"
+max_daily_loss_pct = 2.0
+max_open_positions = 10
+
+# Optional. When omitted, the runtime falls back to account/profile behavior.
+# target_order_notional_usd = 2500.0
+
+max_order_notional_usd = 2500.0
+max_spread_bps = 20
+max_slippage_bps = 30
+stale_data_ms = 30000
+cooldown_after_reject_ms = 15000

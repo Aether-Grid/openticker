@@ -1,0 +1,14 @@
+[package]
+name = "openticker-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+openticker-core = { path = "../openticker-core" }
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "openticker-execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+openticker-config = { path = "../openticker-config" }
+openticker-core = { path = "../openticker-core" }
+openticker-risk = { path = "../openticker-risk" }
+serde.workspace = true
+thiserror.workspace = true

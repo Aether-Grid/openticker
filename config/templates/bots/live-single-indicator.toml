@@ -1,0 +1,60 @@
+# Live single-indicator bot template.
+#
+# Safety notes:
+# - `allow_live = true` is required when global safety enforces explicit live opt-in.
+# - `signal_mode = "intrabar"` is currently hard-rejected for live accounts.
+# - Prefer `confirmed_only` until live preview parity is explicitly proven.
+# - Reconciliation settings on the referenced account must be correct before startup.
+
+id = "equities-basket-live-confirmed"
+enabled = true
+allow_live = true
+market = "equities"
+symbols = ["AAPL", "MSFT", "COIN", "PLTR", "TSLA", "CCL", "CZR"]
+# Each symbol runs as an independent runtime lane under this bot.
+timeframe = "1m"
+account = "alpaca-live"
+data_connector = "alpaca"
+execution_connector = "alpaca"
+strategy = "single_indicator_signal"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 1000
+
+# Optional warmup override.
+# warmup_target_bars = 200
+
+[[indicators]]
+id = "trend-1"
+type = "sma_crossover"
+enabled = true
+role = "primary_signal"
+signal_policy = "confirmed_required"
+
+# Optional metadata-aware trade gating.
+[indicators.metadata_filters.entry]
+# allowed_strengths = ["strong"]
+
+[indicators.metadata_filters.exit]
+# allowed_strengths = ["normal", "strong"]
+
+[indicators.params]
+fast_length = 10
+slow_length = 30
+
+[budget]
+# Shared across all lanes for this bot.
+pct = 5.0
+
+[risk]
+profile = "equities-default"
+
+[risk.overrides]
+
+stale_data_ms = 30000
+# target_order_notional_usd = 1000.0
+# max_order_notional_usd = 1000.0
+
+[execution_constraints]
+# quantity_step = 1.0
+# min_quantity = 1.0

@@ -1,0 +1,15 @@
+[package]
+name = "openticker-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+openticker-config = { path = "../openticker-config" }
+openticker-core = { path = "../openticker-core" }
+openticker-signals = { path = "../openticker-signals" }
+toml.workspace = true

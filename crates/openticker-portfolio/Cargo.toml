@@ -1,0 +1,17 @@
+[package]
+name = "openticker-portfolio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openticker-connectors = { path = "../openticker-connectors" }
+openticker-ledger = { path = "../openticker-ledger" }
+openticker-storage = { path = "../openticker-storage" }
+serde.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true

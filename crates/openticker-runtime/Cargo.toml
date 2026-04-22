@@ -1,0 +1,34 @@
+[package]
+name = "openticker-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+openticker-config = { path = "../openticker-config" }
+openticker-connectors = { path = "../openticker-connectors" }
+openticker-core = { path = "../openticker-core" }
+openticker-dataplane = { path = "../openticker-dataplane" }
+openticker-data = { path = "../openticker-data" }
+openticker-execution = { path = "../openticker-execution" }
+openticker-gateway = { path = "../openticker-gateway" }
+openticker-instance = { path = "../openticker-instance" }
+openticker-ledger = { path = "../openticker-ledger" }
+openticker-lane = { path = "../openticker-lane" }
+openticker-portfolio = { path = "../openticker-portfolio" }
+openticker-risk = { path = "../openticker-risk" }
+openticker-storage = { path = "../openticker-storage" }
+openticker-trace = { path = "../openticker-trace" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+openticker-testkit = { path = "../openticker-testkit" }
+toml.workspace = true

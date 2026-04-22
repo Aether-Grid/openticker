@@ -1,0 +1,69 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "providers";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="providers" hidden={!isActive}>
+  <div class="mini-summary">
+    <div class="mini-card"><span>Visible</span><strong id="provider-total">-</strong><p>Provider events in the current request window.</p></div>
+    <div class="mini-card"><span>Requested</span><strong id="provider-requested">-</strong><p>Outbound requests issued to connectors or venues.</p></div>
+    <div class="mini-card"><span>Succeeded</span><strong id="provider-succeeded">-</strong><p>Requests that returned normalized results.</p></div>
+    <div class="mini-card"><span>Failed</span><strong id="provider-failed">-</strong><p>Provider calls or payload normalization failures.</p></div>
+    <div class="mini-card"><span>Connectors</span><strong id="provider-connectors">-</strong><p>Distinct connector kinds visible in the log window.</p></div>
+  </div>
+
+  <div class="grid-two wide-left">
+    <div class="stack">
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Provider Traffic Mix</h3>
+            <p>Request volume by provider operation and stage from the persisted runtime event stream.</p>
+          </div>
+        </div>
+        <div id="provider-summary-chart" class="bar-list"></div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Provider Event Log</h3>
+            <p>Recent requests, responses, normalization payloads, and failures emitted at the runtime/provider boundary.</p>
+          </div>
+          <span id="provider-list-count" class="badge">0 records</span>
+        </div>
+        <ul id="provider-list" class="activity-list"></ul>
+      </article>
+    </div>
+
+    <div class="stack">
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3 id="provider-selected-title">Selected Provider Event</h3>
+            <p id="provider-selected-note">Choose a provider event on the left to inspect the normalized request and response payload here.</p>
+          </div>
+          <span id="provider-selected-meta" class="badge">No selection</span>
+        </div>
+        <div class="detail-list">
+          <div class="detail-row"><span>Operation</span><strong id="provider-selected-operation">-</strong></div>
+          <div class="detail-row"><span>Stage</span><strong id="provider-selected-stage">-</strong></div>
+          <div class="detail-row"><span>Connector</span><strong id="provider-selected-connector">-</strong></div>
+          <div class="detail-row"><span>Account</span><strong id="provider-selected-account">-</strong></div>
+          <div class="detail-row"><span>Entity</span><strong id="provider-selected-entity">-</strong></div>
+          <div class="detail-row"><span>Created</span><strong id="provider-selected-created">-</strong></div>
+        </div>
+      </article>
+
+      <article class="panel panel-section">
+        <div class="panel-head">
+          <div>
+            <h3>Payload Inspector</h3>
+            <p>Raw persisted provider-event payload for detailed request and response inspection.</p>
+          </div>
+        </div>
+        <pre id="provider-terminal" class="terminal">Select a provider event to inspect it here.</pre>
+      </article>
+    </div>
+  </div>
+</section>

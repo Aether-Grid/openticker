@@ -1,0 +1,5 @@
+.git
+target
+var
+.env
+config/.env

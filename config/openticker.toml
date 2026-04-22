@@ -1,0 +1,30 @@
+[service]
+environment = "dev"
+data_dir = "./var"
+bot_dir = "./config/bots"
+
+[http]
+enabled = true
+bind = "127.0.0.1:8080"
+request_log = true
+openapi_enabled = true
+openapi_path = "/openapi.json"
+
+[storage]
+kind = "sqlite"
+path = "./var/openticker.db"
+busy_timeout_ms = 5000
+prune_removed_bots_on_startup = true
+
+[observability]
+log_level = "info"
+metrics_enabled = true
+metrics_path = "/metrics"
+
+[safety]
+require_explicit_live_enable = true
+default_start_paused_if_recovery_uncertain = true
+
+[data_plane]
+default_polling_interval_ms = 5000
+default_retention = 500

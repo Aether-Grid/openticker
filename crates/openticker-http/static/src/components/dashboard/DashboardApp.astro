@@ -1,0 +1,41 @@
+---
+import type { DashboardPageId } from "../../lib/dashboard/pages";
+import Header from "./Header.astro";
+import Sidebar from "./Sidebar.astro";
+import ActivityView from "./views/ActivityView.astro";
+import BotDetailView from "./views/BotDetailView.astro";
+import BotsView from "./views/BotsView.astro";
+import ConfigView from "./views/ConfigView.astro";
+import ConnectorsView from "./views/ConnectorsView.astro";
+import CycleDetailView from "./views/CycleDetailView.astro";
+import CyclesView from "./views/CyclesView.astro";
+import FeedDetailView from "./views/FeedDetailView.astro";
+import FeedsView from "./views/FeedsView.astro";
+import OverviewView from "./views/OverviewView.astro";
+import PortfolioView from "./views/PortfolioView.astro";
+import ProvidersView from "./views/ProvidersView.astro";
+
+const { currentPage = "overview" } = Astro.props as {
+  currentPage?: DashboardPageId;
+};
+---
+
+<main class="app-shell">
+  <Sidebar currentPage={currentPage} />
+
+  <section class="workspace-shell">
+    <Header currentPage={currentPage} />
+    <OverviewView currentPage={currentPage} />
+    <FeedsView currentPage={currentPage} />
+    <FeedDetailView currentPage={currentPage} />
+    <BotsView currentPage={currentPage} />
+    <BotDetailView currentPage={currentPage} />
+    <PortfolioView currentPage={currentPage} />
+    <ActivityView currentPage={currentPage} />
+    <CyclesView currentPage={currentPage} />
+    <CycleDetailView currentPage={currentPage} />
+    <ProvidersView currentPage={currentPage} />
+    <ConnectorsView currentPage={currentPage} />
+    <ConfigView currentPage={currentPage} />
+  </section>
+</main>

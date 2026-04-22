@@ -1,0 +1,29 @@
+[package]
+name = "openticker-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+openticker-config = { path = "../openticker-config" }
+openticker-connectors = { path = "../openticker-connectors" }
+openticker-core = { path = "../openticker-core" }
+openticker-dataplane = { path = "../openticker-dataplane" }
+openticker-data = { path = "../openticker-data" }
+openticker-runtime = { path = "../openticker-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+tower = "0.5.2"

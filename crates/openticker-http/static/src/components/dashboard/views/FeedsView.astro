@@ -1,0 +1,25 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "feeds";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="feeds" hidden={!isActive}>
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Dataplane Feed Monitor</h3>
+        <p>Registered ticker streams, freshness, fetch pressure, and in-memory close sparklines from the dataplane bar buffer.</p>
+      </div>
+      <span id="streams-count" class="badge">0 streams</span>
+    </div>
+    <div class="stream-selected-grid">
+      <div class="stream-selected-card"><span>Streams</span><strong id="streams-total">-</strong></div>
+      <div class="stream-selected-card"><span>Healthy</span><strong id="streams-healthy">-</strong></div>
+      <div class="stream-selected-card"><span>Warning</span><strong id="streams-stale">-</strong></div>
+      <div class="stream-selected-card"><span>Fetch Error</span><strong id="streams-erroring">-</strong></div>
+      <div class="stream-selected-card"><span>Attached Bots</span><strong id="streams-attached">-</strong></div>
+      <div class="stream-selected-card"><span>Latest Close</span><strong id="streams-latest-close">-</strong></div>
+    </div>
+    <ul id="stream-list" class="stream-list"></ul>
+  </article>
+</section>

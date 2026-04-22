@@ -1,0 +1,10 @@
+id = "binance-demo"
+kind = "binance"
+mode = "paper"
+api_key_env = "BINANCE_DEMO_KEY"
+api_secret_env = "BINANCE_DEMO_SECRET"
+use_demo_mode = true
+reconciliation_remote_snapshot = true
+execution_remote_submission = true
+cash_balance_assets = ["USDT", "USDC"]
+total_budget_usd = 10000.0

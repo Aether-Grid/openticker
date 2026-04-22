@@ -1,0 +1,41 @@
+id = "crypto-5m-consensus-sma-rsi"
+enabled = true
+allow_live = false
+market = "crypto"
+symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+timeframe = "5m"
+account = "binance-demo"
+data_connector = "binance"
+execution_connector = "binance"
+strategy = "consensus"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 1000
+
+[[indicators]]
+id = "primary-1"
+type = "sma_crossover"
+role = "primary_signal"
+signal_policy = "confirmed_required"
+weight = 1.0
+
+[indicators.params]
+fast_length = 10
+slow_length = 30
+
+[[indicators]]
+id = "filter-1"
+type = "rsi_threshold"
+role = "filter"
+signal_policy = "confirmed_required"
+weight = 0.5
+params = { period = 14, oversold = 30.0, overbought = 70.0 }
+
+[budget]
+pct = 10.0
+
+[risk]
+profile = "crypto-default"
+
+[risk.overrides]
+stale_data_ms = 30000

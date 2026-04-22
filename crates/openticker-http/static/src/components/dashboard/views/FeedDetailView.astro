@@ -1,0 +1,68 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "feed-detail";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="feed-detail" hidden={!isActive}>
+  <div class="toolbar-row" style="justify-content:flex-start; margin-bottom:12px;">
+    <button type="button" class="toolbar-button" id="feed-detail-back">Back To Feeds</button>
+  </div>
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Selected Feed Buffer</h3>
+        <p id="stream-selected-note">Select a dataplane stream to inspect its recent OHLCV bars and in-memory close chart.</p>
+      </div>
+      <span id="stream-selected-pill" class="badge">No selection</span>
+    </div>
+    <div id="stream-selected-stats" class="stream-selected-grid">
+      <div class="stream-selected-card"><span>Stream</span><strong id="stream-selected-key">-</strong></div>
+      <div class="stream-selected-card"><span>Polling</span><strong id="stream-selected-polling">-</strong></div>
+      <div class="stream-selected-card"><span>Bar Age</span><strong id="stream-selected-staleness">-</strong></div>
+      <div class="stream-selected-card"><span>Fetch / Error</span><strong id="stream-selected-fetches">-</strong></div>
+      <div class="stream-selected-card"><span>Latest Bar</span><strong id="stream-selected-latest-bar">-</strong></div>
+      <div class="stream-selected-card"><span>Attached</span><strong id="stream-selected-attached-count">-</strong></div>
+    </div>
+    <div id="stream-selected-attached" class="selection-list"></div>
+    <div id="stream-chart" class="sparkline-shell large"></div>
+    <div class="grid-two">
+      <div>
+        <p class="terminal-note">Current Buffer (In-Memory)</p>
+        <div class="table-wrap">
+          <table class="stream-bars-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Open</th>
+                <th>High</th>
+                <th>Low</th>
+                <th>Close</th>
+                <th>Volume</th>
+              </tr>
+            </thead>
+            <tbody id="stream-bars-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <p class="terminal-note" id="stream-history-note">Connector History (On Demand)</p>
+        <div class="table-wrap">
+          <table class="stream-bars-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Open</th>
+                <th>High</th>
+                <th>Low</th>
+                <th>Close</th>
+                <th>Volume</th>
+              </tr>
+            </thead>
+            <tbody id="stream-history-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <pre id="stream-terminal" class="terminal small">Select a stream to inspect the dataplane feed buffer here.</pre>
+  </article>
+</section>

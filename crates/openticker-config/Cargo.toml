@@ -1,0 +1,20 @@
+[package]
+name = "openticker-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dotenvy.workspace = true
+openticker-core = { path = "../openticker-core" }
+openticker-signals = { path = "../openticker-signals" }
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

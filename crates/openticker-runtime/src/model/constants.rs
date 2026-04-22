@@ -1,0 +1,3 @@
+pub(crate) const RECONCILIATION_JOURNAL_SCAN_LIMIT: usize = 2_000;
+pub(crate) const POSITION_QUANTITY_TOLERANCE: f64 = 1e-9;
+pub(crate) const PROVIDER_EVENT_PAYLOAD_PREVIEW_LIMIT: usize = 4_096;

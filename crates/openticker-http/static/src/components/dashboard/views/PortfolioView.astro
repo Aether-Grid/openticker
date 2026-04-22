@@ -1,0 +1,119 @@
+---
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "portfolio";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="portfolio" hidden={!isActive}>
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Portfolio Ownership Snapshot</h3>
+        <p>Ledger-backed account, bot, and lane ownership with explicit cap, commitment, blocked room, and tradable room semantics.</p>
+      </div>
+      <span id="portfolio-chip" class="badge">Ledger Pending</span>
+    </div>
+    <div class="metric-grid">
+      <article class="metric-card"><span>Accounts</span><strong id="portfolio-accounts">-</strong><p>Distinct account rows returned by the runtime ledger.</p></article>
+      <article class="metric-card"><span>Bots</span><strong id="portfolio-bots">-</strong><p>Bot-level allocation slices tracked by the ledger.</p></article>
+      <article class="metric-card"><span>Lanes</span><strong id="portfolio-lanes">-</strong><p>Lane ownership paths by account, bot, and symbol.</p></article>
+      <article class="metric-card"><span>Effective Cap</span><strong id="portfolio-effective-cap">-</strong><p>Per account: min(declared cap, live balance clamp).</p></article>
+      <article class="metric-card"><span>Committed</span><strong id="portfolio-committed">-</strong><p>Attributed + reserved + unattributed open notional.</p></article>
+      <article class="metric-card"><span>Tradeable Room</span><strong id="portfolio-tradeable">-</strong><p>Room still open for new entries after all checks.</p></article>
+      <article class="metric-card"><span>Blocked Room</span><strong id="portfolio-blocked">-</strong><p>Available room currently blocked by exceptions.</p></article>
+      <article class="metric-card"><span>Unattributed Open</span><strong id="portfolio-unattributed">-</strong><p>Open notional not yet tied to an owner path.</p></article>
+    </div>
+    <p id="portfolio-note" class="terminal-note">Ledger surface not sampled yet.</p>
+  </article>
+
+  <div class="stack">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Account Ledger</h3>
+          <p>Per-account cap stack and ownership buckets. Available room equals effective cap minus committed.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Declared</th>
+              <th>Live Balance</th>
+              <th>Effective Cap</th>
+              <th>Attributed Open</th>
+              <th>Reserved Open</th>
+              <th>Unattributed Open</th>
+              <th>Committed Total</th>
+              <th>Blocked Room</th>
+              <th>Tradeable Room</th>
+            </tr>
+          </thead>
+          <tbody id="portfolio-accounts-body"></tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Bot Allocation Ledger</h3>
+          <p>Per-bot slices inside each account. Allocated uses effective cap multiplied by the bot slice percentage.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Bot</th>
+              <th>Account</th>
+              <th>Slice %</th>
+              <th>Allocated</th>
+              <th>Attributed Open</th>
+              <th>Reserved Open</th>
+              <th>Committed Total</th>
+              <th>Blocked Room</th>
+              <th>Tradeable Room</th>
+            </tr>
+          </thead>
+          <tbody id="portfolio-bots-body"></tbody>
+        </table>
+      </div>
+    </article>
+  </div>
+
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Lane Ownership Paths</h3>
+        <p>Ownership paths emitted by the ledger for each active account + bot + symbol lane.</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>Bot</th>
+            <th>Symbol</th>
+            <th>Attributed</th>
+            <th>Reserved</th>
+            <th>Committed</th>
+            <th>Slice Usage</th>
+          </tr>
+        </thead>
+        <tbody id="portfolio-lanes-body"></tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="panel panel-section">
+    <div class="panel-head">
+      <div>
+        <h3>Raw Ledger Payload</h3>
+        <p>Full JSON snapshot used to render this page.</p>
+      </div>
+    </div>
+    <pre id="portfolio-terminal" class="terminal small">Ledger payload pending.</pre>
+  </article>
+</section>

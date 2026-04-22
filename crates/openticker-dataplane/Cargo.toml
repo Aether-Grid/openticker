@@ -1,0 +1,17 @@
+[package]
+name = "openticker-dataplane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openticker-core = { path = "../openticker-core" }
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+chrono.workspace = true

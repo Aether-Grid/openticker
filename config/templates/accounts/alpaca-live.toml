@@ -1,0 +1,25 @@
+# Alpaca live account template.
+
+id = "alpaca-live"
+kind = "alpaca"
+mode = "live"
+api_key_env = "ALPACA_LIVE_KEY"
+api_secret_env = "ALPACA_LIVE_SECRET"
+
+# Optional. Alpaca does not use a passphrase.
+# passphrase_env = ""
+
+# Schema default: false
+use_demo_mode = false
+
+# Schema default: false
+reconciliation_remote_snapshot = true
+
+# Optional. When omitted, the runtime uses connector defaults.
+execution_remote_submission = true
+
+# Optional. Use this only when remote reconciliation or remote execution submission needs an
+# explicit base URL override.
+# reconciliation_base_url = "https://api.alpaca.markets"
+
+total_budget_usd = 10000.0

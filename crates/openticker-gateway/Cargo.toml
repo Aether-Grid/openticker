@@ -1,0 +1,17 @@
+[package]
+name = "openticker-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+openticker-config = { path = "../openticker-config" }
+openticker-connectors = { path = "../openticker-connectors" }
+openticker-core = { path = "../openticker-core" }
+openticker-data = { path = "../openticker-data" }
+openticker-execution = { path = "../openticker-execution" }
+thiserror.workspace = true

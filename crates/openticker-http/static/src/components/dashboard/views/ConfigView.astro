@@ -1,0 +1,149 @@
+---
+import { terminalTabs } from "../../../lib/dashboard/pages";
+
+const { currentPage = "overview" } = Astro.props;
+const isActive = currentPage === "config";
+---
+
+<section class={`workspace-page ${isActive ? "active" : ""}`} data-page="config" hidden={!isActive}>
+  <div class="grid-three">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Managed Config Snapshot</h3>
+          <p>Top-level counts and operator safety posture from <code>/v1/config/effective</code>.</p>
+        </div>
+      </div>
+      <div class="metric-grid">
+        <article class="metric-card"><span>Accounts</span><strong id="cfg-accounts">-</strong><p>Configured account entries.</p></article>
+        <article class="metric-card"><span>Risk Profiles</span><strong id="cfg-risk">-</strong><p>Reusable risk policy definitions.</p></article>
+        <article class="metric-card"><span>Bots</span><strong id="cfg-instances">-</strong><p>Managed bot definitions.</p></article>
+        <article class="metric-card"><span>Environment</span><strong id="cfg-environment">-</strong><p>Global service environment label.</p></article>
+        <article class="metric-card"><span>Storage</span><strong id="cfg-storage">-</strong><p>Configured journal backend.</p></article>
+        <article class="metric-card"><span>Live Gate</span><strong id="cfg-live-gate">-</strong><p>Explicit live-mode gate requirement.</p></article>
+      </div>
+      <p id="cfg-note" class="terminal-note">Managed config not loaded yet.</p>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>API Surface Matrix</h3>
+          <p>Surface-level diagnostics for health, readiness, metrics, and generated OpenAPI inventory.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Status</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="api-surface-body"></tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Risk Profile Catalog</h3>
+          <p>Quick access to visible risk profile identifiers from the effective config bundle.</p>
+        </div>
+      </div>
+      <div id="cfg-risk-list" class="risk-chip-list"></div>
+    </article>
+  </div>
+
+  <div class="grid-two">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Managed Accounts</h3>
+          <p>Account inventory with connector mode and secret-reference completeness.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Kind</th>
+              <th>Mode</th>
+              <th>Secrets</th>
+              <th>Execution</th>
+            </tr>
+          </thead>
+          <tbody id="config-accounts-body"></tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Instance Catalog</h3>
+          <p>Managed bot bindings, timeframe, market, and runtime-affecting associations.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Account</th>
+              <th>Market</th>
+              <th>Timeframe</th>
+              <th>Symbols</th>
+            </tr>
+          </thead>
+          <tbody id="config-instances-body"></tbody>
+        </table>
+      </div>
+    </article>
+  </div>
+
+  <div class="grid-two">
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Route Explorer</h3>
+          <p>Flattened route inventory from <code>/openapi.json</code>.</p>
+        </div>
+        <span id="routes-count" class="badge">0 routes</span>
+      </div>
+      <div class="table-wrap">
+        <table class="route-table">
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Operation</th>
+            </tr>
+          </thead>
+          <tbody id="routes-body"></tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="panel panel-section">
+      <div class="panel-head">
+        <div>
+          <h3>Terminal Preview</h3>
+          <p>Switch between effective config, raw metrics, full OpenAPI payload, and the selected route definition.</p>
+        </div>
+        <span id="terminal-label" class="badge">Config JSON</span>
+      </div>
+      <div class="terminal-tabs" id="terminal-tabs">
+        {terminalTabs.map((tab, index) => (
+          <button type="button" class={`terminal-tab ${index === 0 ? "active" : ""}`} data-terminal-tab={tab.id}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <pre id="config-terminal" class="terminal">Waiting for config or API payload.</pre>
+    </article>
+  </div>
+</section>
