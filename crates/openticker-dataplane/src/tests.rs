@@ -10,6 +10,8 @@ fn duplicate_stream_requests_share_one_registry_entry() {
             key: key.clone(),
             retention: 500,
             polling_interval_ms: 5_000,
+            close_poll_retry_ms: Some(4_000),
+            close_poll_grace_ms: Some(60_000),
             preview_enabled: false,
             sources: vec![StreamSource::Instance("aapl-fast".to_owned())],
         },
@@ -17,6 +19,8 @@ fn duplicate_stream_requests_share_one_registry_entry() {
             key,
             retention: 700,
             polling_interval_ms: 1_000,
+            close_poll_retry_ms: Some(2_000),
+            close_poll_grace_ms: Some(30_000),
             preview_enabled: false,
             sources: vec![
                 StreamSource::Watchlist,
@@ -29,6 +33,8 @@ fn duplicate_stream_requests_share_one_registry_entry() {
     assert_eq!(specs.len(), 1);
     assert_eq!(specs[0].retention, 700);
     assert_eq!(specs[0].polling_interval_ms, 1_000);
+    assert_eq!(specs[0].close_poll_retry_ms, Some(2_000));
+    assert_eq!(specs[0].close_poll_grace_ms, Some(30_000));
     assert_eq!(
         specs[0].sources,
         vec![
@@ -65,6 +71,8 @@ fn dataplane_only_returns_due_streams() {
             key: key("alpaca-paper", "AAPL", Timeframe::M1),
             retention: 500,
             polling_interval_ms: 1_000,
+            close_poll_retry_ms: None,
+            close_poll_grace_ms: None,
             preview_enabled: false,
             sources: vec![StreamSource::Instance("aapl".to_owned())],
         },
@@ -72,6 +80,8 @@ fn dataplane_only_returns_due_streams() {
             key: key("alpaca-paper", "SPY", Timeframe::M1),
             retention: 500,
             polling_interval_ms: 5_000,
+            close_poll_retry_ms: None,
+            close_poll_grace_ms: None,
             preview_enabled: false,
             sources: vec![StreamSource::Watchlist],
         },
@@ -88,12 +98,69 @@ fn dataplane_only_returns_due_streams() {
 }
 
 #[test]
+fn dataplane_retries_inside_close_freshness_window() {
+    let stream_key = key("alpaca-paper", "AAPL", Timeframe::M1);
+    let data_plane = DataPlane::new([StreamSpec {
+        key: stream_key.clone(),
+        retention: 500,
+        polling_interval_ms: 60_000,
+        close_poll_retry_ms: Some(2_000),
+        close_poll_grace_ms: Some(30_000),
+        preview_enabled: false,
+        sources: vec![StreamSource::Instance("aapl".to_owned())],
+    }]);
+
+    data_plane
+        .record_fetched_bar(&stream_key, 0, bar(0, 100.0))
+        .unwrap();
+    data_plane
+        .record_manual_poll_attempt(&stream_key, 59_500)
+        .unwrap();
+
+    assert!(data_plane.take_due_streams(60_500).is_empty());
+    assert_eq!(
+        data_plane.take_due_streams(61_500),
+        vec![stream_key.clone()]
+    );
+
+    data_plane
+        .record_fetched_bar(&stream_key, 61_500, bar(1, 101.0))
+        .unwrap();
+    assert!(data_plane.take_due_streams(63_500).is_empty());
+}
+
+#[test]
+fn dataplane_does_not_fast_retry_after_stale_deadline() {
+    let stream_key = key("alpaca-paper", "AAPL", Timeframe::M1);
+    let data_plane = DataPlane::new([StreamSpec {
+        key: stream_key.clone(),
+        retention: 500,
+        polling_interval_ms: 60_000,
+        close_poll_retry_ms: Some(2_000),
+        close_poll_grace_ms: Some(30_000),
+        preview_enabled: false,
+        sources: vec![StreamSource::Instance("aapl".to_owned())],
+    }]);
+
+    data_plane
+        .record_fetched_bar(&stream_key, 0, bar(0, 100.0))
+        .unwrap();
+    data_plane
+        .record_manual_poll_attempt(&stream_key, 89_000)
+        .unwrap();
+
+    assert!(data_plane.take_due_streams(91_500).is_empty());
+}
+
+#[test]
 fn snapshot_includes_attached_instances_and_staleness() {
     let stream_key = key("alpaca-paper", "AAPL", Timeframe::M1);
     let data_plane = DataPlane::new([StreamSpec {
         key: stream_key.clone(),
         retention: 500,
         polling_interval_ms: 1_000,
+        close_poll_retry_ms: None,
+        close_poll_grace_ms: None,
         preview_enabled: false,
         sources: vec![
             StreamSource::Watchlist,
@@ -124,6 +191,8 @@ fn replace_streams_preserves_existing_buffer_for_surviving_stream() {
         key: stream_key.clone(),
         retention: 500,
         polling_interval_ms: 1_000,
+        close_poll_retry_ms: None,
+        close_poll_grace_ms: None,
         preview_enabled: false,
         sources: vec![StreamSource::Instance("aapl".to_owned())],
     }]);
@@ -138,6 +207,8 @@ fn replace_streams_preserves_existing_buffer_for_surviving_stream() {
             key: stream_key.clone(),
             retention: 10,
             polling_interval_ms: 2_000,
+            close_poll_retry_ms: None,
+            close_poll_grace_ms: None,
             preview_enabled: false,
             sources: vec![StreamSource::Instance("aapl".to_owned())],
         },
@@ -145,6 +216,8 @@ fn replace_streams_preserves_existing_buffer_for_surviving_stream() {
             key: key("alpaca-paper", "SPY", Timeframe::M1),
             retention: 500,
             polling_interval_ms: 1_000,
+            close_poll_retry_ms: None,
+            close_poll_grace_ms: None,
             preview_enabled: false,
             sources: vec![StreamSource::Watchlist],
         },

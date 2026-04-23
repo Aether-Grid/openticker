@@ -8,6 +8,8 @@ use openticker_core::ExecutionMode;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+const CLOSE_POLL_RETRY_MS: u64 = 2_000;
+
 impl Runtime {
     #[must_use]
     pub fn connector_registry(&self) -> Arc<Mutex<ConnectorRegistry>> {
@@ -27,6 +29,8 @@ impl Runtime {
                 },
                 retention: self.catalog.data_plane_config.default_retention,
                 polling_interval_ms: instance.config.polling_interval_ms,
+                close_poll_retry_ms: Some(CLOSE_POLL_RETRY_MS),
+                close_poll_grace_ms: Some(instance.risk_limits.stale_data_ms),
                 preview_enabled: instance_preview_enabled(instance),
                 sources: vec![StreamSource::Instance(instance_id.clone())],
             });
@@ -45,6 +49,8 @@ impl Runtime {
                 polling_interval_ms: watch
                     .polling_interval_ms
                     .unwrap_or(self.catalog.data_plane_config.default_polling_interval_ms),
+                close_poll_retry_ms: None,
+                close_poll_grace_ms: None,
                 preview_enabled: false,
                 sources: vec![StreamSource::Watchlist],
             });
@@ -170,6 +176,8 @@ mod tests {
             .expect("AAPL stream should exist");
         assert_eq!(aapl.retention, 1_000);
         assert_eq!(aapl.polling_interval_ms, 1_000);
+        assert_eq!(aapl.close_poll_retry_ms, Some(2_000));
+        assert_eq!(aapl.close_poll_grace_ms, Some(3_000));
         assert_eq!(
             aapl.sources,
             vec![
@@ -188,6 +196,8 @@ mod tests {
             spy.polling_interval_ms,
             config.global.data_plane.default_polling_interval_ms
         );
+        assert_eq!(spy.close_poll_retry_ms, None);
+        assert_eq!(spy.close_poll_grace_ms, None);
         assert_eq!(spy.sources, vec![StreamSource::Watchlist]);
     }
 

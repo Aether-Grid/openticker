@@ -23,7 +23,7 @@ use openticker_trace::{
     BudgetRoomContext, CapitalState, CycleOutcome, CycleRiskDecisionLabel, CycleTrace,
     CycleTrigger, CycleTriggerKind, ExecutionFillStep, ExecutionOrderStep, ExecutionStep,
     IntentStep, PositionStep, ReconciliationContext, RelatedEvent, RelatedRecord, RiskStep,
-    SignalStep, TraceIdentity, build_cycle_summary,
+    SignalStep, StaleDataDiagnostics, TraceIdentity, build_cycle_summary,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -479,6 +479,7 @@ pub struct ProcessBarEvaluation {
     pub order_ledger_outcome: Option<OrderLedgerOutcome>,
     pub risk_decision: RiskDecision,
     pub stale_data: bool,
+    pub stale_data_diagnostics: Option<StaleDataDiagnostics>,
     pub cooldown_active: bool,
     pub account_open_positions: u32,
     pub account_daily_loss_pct: f64,
@@ -968,6 +969,7 @@ pub struct SignalEvaluationKernelInput {
     pub strategy_rationale: Option<String>,
     pub bar_close: f64,
     pub stale_data: bool,
+    pub stale_data_diagnostics: Option<StaleDataDiagnostics>,
     pub account_open_positions: u32,
     pub account_daily_loss_pct: f64,
     pub risk_limits: RiskLimits,
@@ -2765,6 +2767,7 @@ pub fn build_cycle_trace(
                 RiskDecision::Reject { reason } => Some((*reason).to_owned()),
             },
             stale_data: evaluation.stale_data,
+            stale_data_diagnostics: evaluation.stale_data_diagnostics.clone(),
             cooldown_active: evaluation.cooldown_active,
             account_open_positions: evaluation.account_open_positions,
             account_daily_loss_pct: evaluation.account_daily_loss_pct,
@@ -3053,6 +3056,7 @@ pub fn build_process_bar_evaluation(input: SignalEvaluationKernelInput) -> Proce
         strategy_rationale,
         bar_close,
         stale_data,
+        stale_data_diagnostics,
         account_open_positions,
         account_daily_loss_pct,
         risk_limits,
@@ -3120,6 +3124,7 @@ pub fn build_process_bar_evaluation(input: SignalEvaluationKernelInput) -> Proce
         order_ledger_outcome: order_quantity_resolution.ledger_outcome,
         risk_decision,
         stale_data,
+        stale_data_diagnostics,
         cooldown_active,
         account_open_positions,
         account_daily_loss_pct,
@@ -3132,16 +3137,38 @@ pub fn build_process_bar_evaluation(input: SignalEvaluationKernelInput) -> Proce
 }
 
 #[must_use]
-pub fn market_data_is_stale(bar: &OhlcvBar, timeframe: Timeframe, stale_data_ms: u64) -> bool {
+pub fn market_data_freshness(
+    bar: &OhlcvBar,
+    timeframe: Timeframe,
+    stale_data_ms: u64,
+    evaluated_at_ms: i64,
+) -> (bool, StaleDataDiagnostics) {
     let timeframe_ms = i64::try_from(timeframe.duration().as_millis()).unwrap_or(i64::MAX);
     let grace_ms = i64::try_from(stale_data_ms).unwrap_or(i64::MAX);
-    let stale_deadline_ms = bar
+    let close_timestamp_ms = bar
         .timestamp
         .timestamp_millis()
-        .saturating_add(timeframe_ms)
-        .saturating_add(grace_ms);
+        .saturating_add(timeframe_ms);
+    let stale_deadline_ms = close_timestamp_ms.saturating_add(grace_ms);
+    let diagnostics = StaleDataDiagnostics {
+        bar_timestamp_ms: bar.timestamp.timestamp_millis(),
+        close_timestamp_ms,
+        stale_deadline_ms,
+        evaluated_at_ms,
+    };
 
-    chrono::Utc::now().timestamp_millis() > stale_deadline_ms
+    (evaluated_at_ms > stale_deadline_ms, diagnostics)
+}
+
+#[must_use]
+pub fn market_data_is_stale(bar: &OhlcvBar, timeframe: Timeframe, stale_data_ms: u64) -> bool {
+    market_data_freshness(
+        bar,
+        timeframe,
+        stale_data_ms,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .0
 }
 
 #[cfg(test)]

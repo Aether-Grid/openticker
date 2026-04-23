@@ -12,6 +12,6 @@ pub use id::{CycleTriggerKind, TraceIdentity, generate_trace_id};
 pub use steps::{
     BudgetRoomContext, CycleTrigger, ExecutionFillStep, ExecutionOrderStep, ExecutionStep,
     IntentStep, PositionStep, ReconciliationContext, ReconciliationSnapshot, RelatedEvent,
-    RelatedRecord, RiskStep, SignalStep,
+    RelatedRecord, RiskStep, SignalStep, StaleDataDiagnostics,
 };
 pub use summary::{CycleOutcome, CycleRiskDecisionLabel, CycleTraceSummary};

@@ -3,7 +3,8 @@ use openticker_trace::{
     BudgetRoomContext, CapitalState, CycleOutcome, CycleRiskDecisionLabel, CycleTrace,
     CycleTraceSummary, CycleTrigger, CycleTriggerKind, ExecutionFillStep, ExecutionOrderStep,
     ExecutionStep, IntentStep, PositionStep, ReconciliationContext, ReconciliationSnapshot,
-    RelatedEvent, RelatedRecord, RiskStep, SignalStep, TraceIdentity, build_cycle_summary,
+    RelatedEvent, RelatedRecord, RiskStep, SignalStep, StaleDataDiagnostics, TraceIdentity,
+    build_cycle_summary,
 };
 use serde_json::json;
 
@@ -86,6 +87,12 @@ fn optional_trace_fields_serialize_consistently() {
         "empty risk reason should be omitted"
     );
     assert!(
+        minimal_json["risk_step"]
+            .get("stale_data_diagnostics")
+            .is_none(),
+        "empty stale diagnostics should be omitted"
+    );
+    assert!(
         minimal_json["execution_step"].get("order").is_none(),
         "missing execution order should be omitted"
     );
@@ -129,6 +136,12 @@ fn optional_trace_fields_serialize_consistently() {
     assert!(
         enriched_json["risk_step"].get("reason").is_some(),
         "populated risk reason should be serialized"
+    );
+    assert!(
+        enriched_json["risk_step"]
+            .get("stale_data_diagnostics")
+            .is_some(),
+        "populated stale diagnostics should be serialized"
     );
     assert!(
         enriched_json["execution_step"].get("order").is_some(),
@@ -239,6 +252,12 @@ fn sample_risk_step(with_optional: bool) -> RiskStep {
         decision: CycleRiskDecisionLabel::Allowed,
         reason: with_optional.then(|| "within_limits".to_owned()),
         stale_data: false,
+        stale_data_diagnostics: with_optional.then_some(StaleDataDiagnostics {
+            bar_timestamp_ms: 1_767_225_600_000,
+            close_timestamp_ms: 1_767_229_200_000,
+            stale_deadline_ms: 1_767_229_203_000,
+            evaluated_at_ms: 1_767_229_201_000,
+        }),
         cooldown_active: false,
         account_open_positions: 0,
         account_daily_loss_pct: 0.0,

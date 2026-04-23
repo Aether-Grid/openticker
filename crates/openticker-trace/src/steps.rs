@@ -40,6 +40,14 @@ pub struct BudgetRoomContext {
     pub remaining_account_usd: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaleDataDiagnostics {
+    pub bar_timestamp_ms: i64,
+    pub close_timestamp_ms: i64,
+    pub stale_deadline_ms: i64,
+    pub evaluated_at_ms: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RiskStep {
     pub intent: TradeIntent,
@@ -47,6 +55,8 @@ pub struct RiskStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub stale_data: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_data_diagnostics: Option<StaleDataDiagnostics>,
     pub cooldown_active: bool,
     pub account_open_positions: u32,
     pub account_daily_loss_pct: f64,

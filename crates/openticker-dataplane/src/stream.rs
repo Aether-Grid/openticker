@@ -45,6 +45,8 @@ pub struct StreamSpec {
     pub key: StreamKey,
     pub retention: usize,
     pub polling_interval_ms: u64,
+    pub close_poll_retry_ms: Option<u64>,
+    pub close_poll_grace_ms: Option<u64>,
     pub preview_enabled: bool,
     pub sources: Vec<StreamSource>,
 }
@@ -54,6 +56,8 @@ pub struct StreamStatus {
     pub key: StreamKey,
     pub retention: usize,
     pub polling_interval_ms: u64,
+    pub close_poll_retry_ms: Option<u64>,
+    pub close_poll_grace_ms: Option<u64>,
     pub last_attempt_ms: Option<i64>,
     pub last_success_ms: Option<i64>,
     pub last_error: Option<String>,

@@ -54,7 +54,10 @@ const topBots = computed(() =>
 )
 
 const healthyStreams = computed(
-  () => streams.value.filter((s) => streamFreshness(s.staleness_ms, s.last_error) === 'ok').length
+  () =>
+    streams.value.filter(
+      (s) => streamFreshness(s.staleness_ms, s.last_error, s.polling_interval_ms, s.close_poll_grace_ms) === 'ok'
+    ).length
 )
 const staleStreams = computed(() => streams.value.length - healthyStreams.value)
 const connectorsUp = computed(
@@ -429,7 +432,16 @@ function connectorTone(state?: string): 'green' | 'yellow' | 'red' | 'neutral' {
                     {{ fmtNumber(stream.latest_bar?.close ?? 0, 4) }}
                   </div>
                   <div class="text-[10.5px] text-ink-soft font-data uppercase tracking-[0.12em]">
-                    {{ freshnessLabel(streamFreshness(stream.staleness_ms, stream.last_error)) }}
+                    {{
+                      freshnessLabel(
+                        streamFreshness(
+                          stream.staleness_ms,
+                          stream.last_error,
+                          stream.polling_interval_ms,
+                          stream.close_poll_grace_ms
+                        )
+                      )
+                    }}
                   </div>
                 </div>
               </NuxtLink>

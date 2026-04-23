@@ -73,6 +73,8 @@ export interface StreamStatus {
   key: StreamKey
   retention?: number
   polling_interval_ms?: number
+  close_poll_retry_ms?: number | null
+  close_poll_grace_ms?: number | null
   last_attempt_ms?: number | null
   last_success_ms?: number | null
   last_error?: string | null
@@ -329,6 +331,12 @@ export interface RiskStepPayload {
   decision: CycleRiskDecision
   reason?: string
   stale_data: boolean
+  stale_data_diagnostics?: {
+    bar_timestamp_ms: number
+    close_timestamp_ms: number
+    stale_deadline_ms: number
+    evaluated_at_ms: number
+  }
   cooldown_active: boolean
   account_open_positions: number
   account_daily_loss_pct: number

@@ -43,9 +43,21 @@ fn normalized_stream_spec(mut spec: StreamSpec) -> StreamSpec {
 fn merge_stream_spec(existing: &mut StreamSpec, next: StreamSpec) {
     existing.retention = existing.retention.max(next.retention);
     existing.polling_interval_ms = existing.polling_interval_ms.min(next.polling_interval_ms);
+    existing.close_poll_retry_ms =
+        min_optional(existing.close_poll_retry_ms, next.close_poll_retry_ms);
+    existing.close_poll_grace_ms =
+        min_optional(existing.close_poll_grace_ms, next.close_poll_grace_ms);
     existing.preview_enabled |= next.preview_enabled;
     existing.sources.extend(next.sources);
     existing.sources = normalized_sources(existing.sources.clone());
+}
+
+fn min_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
 }
 
 fn normalized_sources(sources: Vec<StreamSource>) -> Vec<StreamSource> {

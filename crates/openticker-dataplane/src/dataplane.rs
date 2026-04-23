@@ -113,11 +113,7 @@ impl DataPlane {
         let mut due = Vec::new();
 
         for (key, entry) in &mut state.streams {
-            let polling_interval_ms =
-                i64::try_from(entry.spec.polling_interval_ms).unwrap_or(i64::MAX);
-            let is_due = entry.last_attempt_ms.is_none_or(|last_attempt_ms| {
-                now_ms.saturating_sub(last_attempt_ms) >= polling_interval_ms
-            });
+            let is_due = entry.is_due(now_ms);
             if !is_due {
                 continue;
             }
@@ -455,6 +451,8 @@ impl StreamEntry {
             key: self.spec.key.clone(),
             retention: self.spec.retention,
             polling_interval_ms: self.spec.polling_interval_ms,
+            close_poll_retry_ms: self.spec.close_poll_retry_ms,
+            close_poll_grace_ms: self.spec.close_poll_grace_ms,
             last_attempt_ms: self.last_attempt_ms,
             last_success_ms: self.last_success_ms,
             last_error: self.last_error.clone(),
@@ -470,6 +468,42 @@ impl StreamEntry {
             attached_instances,
             sparkline: self.buffer.sparkline(sparkline_limit),
         }
+    }
+
+    fn is_due(&self, now_ms: i64) -> bool {
+        let polling_interval_ms = i64::try_from(self.spec.polling_interval_ms).unwrap_or(i64::MAX);
+        let normal_due = self.last_attempt_ms.is_none_or(|last_attempt_ms| {
+            now_ms.saturating_sub(last_attempt_ms) >= polling_interval_ms
+        });
+        normal_due || self.close_window_due(now_ms)
+    }
+
+    fn close_window_due(&self, now_ms: i64) -> bool {
+        let Some(retry_ms) = self.spec.close_poll_retry_ms else {
+            return false;
+        };
+        let Some(grace_ms) = self.spec.close_poll_grace_ms else {
+            return false;
+        };
+        let Some(latest_bar) = self.buffer.latest() else {
+            return false;
+        };
+
+        let timeframe_ms =
+            i64::try_from(self.spec.key.timeframe.duration().as_millis()).unwrap_or(i64::MAX);
+        let grace_ms = i64::try_from(grace_ms).unwrap_or(i64::MAX);
+        let expected_close_ms = latest_bar
+            .timestamp
+            .timestamp_millis()
+            .saturating_add(timeframe_ms);
+        let stale_deadline_ms = expected_close_ms.saturating_add(grace_ms);
+        if now_ms < expected_close_ms || now_ms > stale_deadline_ms {
+            return false;
+        }
+
+        let retry_ms = i64::try_from(retry_ms).unwrap_or(i64::MAX);
+        self.last_attempt_ms
+            .is_none_or(|last_attempt_ms| now_ms.saturating_sub(last_attempt_ms) >= retry_ms)
     }
 }
 

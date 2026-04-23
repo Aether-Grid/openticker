@@ -36,7 +36,7 @@ const freshnessItems = [
 ]
 
 function streamState(s: StreamStatus): Freshness {
-  return streamFreshness(s.staleness_ms, s.last_error)
+  return streamFreshness(s.staleness_ms, s.last_error, s.polling_interval_ms, s.close_poll_grace_ms)
 }
 
 const filtered = computed(() => {

@@ -126,11 +126,20 @@ export function extractItems<T>(payload: { items?: T[] } | T[] | undefined | nul
 
 export type Freshness = 'ok' | 'warn' | 'stale' | 'error'
 
-export function streamFreshness(stalenessMs: number | null | undefined, lastError?: string | null): Freshness {
+export function streamFreshness(
+  stalenessMs: number | null | undefined,
+  lastError?: string | null,
+  pollingIntervalMs?: number | null,
+  closePollGraceMs?: number | null
+): Freshness {
   if (lastError) return 'error'
   if (stalenessMs === null || stalenessMs === undefined) return 'ok'
-  if (stalenessMs < 60_000) return 'ok'
-  if (stalenessMs < 5 * 60_000) return 'warn'
+  const cadenceMs = Math.max(pollingIntervalMs ?? 60_000, 1)
+  const graceMs = Math.max(closePollGraceMs ?? 0, 0)
+  const warnAtMs = Math.max(60_000, cadenceMs + graceMs)
+  const staleAtMs = Math.max(5 * 60_000, cadenceMs * 2 + graceMs)
+  if (stalenessMs < warnAtMs) return 'ok'
+  if (stalenessMs < staleAtMs) return 'warn'
   return 'stale'
 }
 

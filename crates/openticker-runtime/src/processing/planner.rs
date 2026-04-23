@@ -6,7 +6,7 @@ use crate::{
 };
 use openticker_lane::{
     PreparedLaneEvaluation, SignalEvaluationKernelInput, build_process_bar_evaluation,
-    market_data_is_stale, prepare_manual_signal_evaluation, prepare_process_bar_evaluation,
+    market_data_freshness, prepare_manual_signal_evaluation, prepare_process_bar_evaluation,
 };
 use openticker_trace::BudgetRoomContext;
 
@@ -117,8 +117,12 @@ impl ProcessingPlanner<'_> {
             &effective_execution_constraints,
             prepared.connector_fractional_entry_supported == Some(true),
         );
-        let stale_data =
-            market_data_is_stale(bar, prepared.timeframe, prepared.risk_limits.stale_data_ms);
+        let (stale_data, stale_data_diagnostics) = market_data_freshness(
+            bar,
+            prepared.timeframe,
+            prepared.risk_limits.stale_data_ms,
+            chrono::Utc::now().timestamp_millis(),
+        );
         Ok(build_process_bar_evaluation(SignalEvaluationKernelInput {
             signal: prepared.signal,
             signal_metadata: prepared.signal_metadata,
@@ -127,6 +131,7 @@ impl ProcessingPlanner<'_> {
             strategy_rationale: prepared.strategy_rationale,
             bar_close: bar.close,
             stale_data,
+            stale_data_diagnostics: Some(stale_data_diagnostics),
             account_open_positions: account_risk.open_positions,
             account_daily_loss_pct: account_risk.daily_loss_pct,
             risk_limits: prepared.risk_limits,
@@ -182,6 +187,7 @@ mod proofs {
             strategy_rationale: None,
             bar_close: 100.0,
             stale_data: false,
+            stale_data_diagnostics: None,
             account_open_positions: 0,
             account_daily_loss_pct: 0.0,
             risk_limits: limits(),
@@ -213,6 +219,7 @@ mod proofs {
             strategy_rationale: None,
             bar_close: 100.0,
             stale_data: false,
+            stale_data_diagnostics: None,
             account_open_positions: 0,
             account_daily_loss_pct: 0.0,
             risk_limits: limits(),
@@ -244,6 +251,7 @@ mod proofs {
             strategy_rationale: None,
             bar_close: 100.0,
             stale_data: false,
+            stale_data_diagnostics: None,
             account_open_positions: 0,
             account_daily_loss_pct: 0.0,
             risk_limits: limits(),
