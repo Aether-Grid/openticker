@@ -47,6 +47,15 @@ const fills = computed<ActivityRecord[]>(() => (snapshot.value?.fills as Activit
 const state = computed(() => detail.value?.state ?? '—')
 const symbols = computed(() => (detail.value?.symbols ?? detail.value?.tickers ?? []) as string[])
 
+const latestClose = computed<number | null>(() => {
+  const lane = lanes.value.find((l) => typeof (l as Record<string, unknown>).last_close === 'number')
+  if (lane) return (lane as Record<string, unknown>).last_close as number
+  const latest = (snapshot.value as Record<string, unknown> | null)?.latest_bar as { close?: number } | undefined
+  return typeof latest?.close === 'number' ? latest.close : null
+})
+
+const injectorOpen = ref(false)
+
 async function act(fn: Promise<unknown>) {
   await fn
   await load()
@@ -97,6 +106,14 @@ function fillField(record: ActivityRecord, key: string): unknown {
           "
         >
           <template #actions>
+            <UButton
+              color="neutral"
+              variant="solid"
+              size="sm"
+              icon="i-lucide-zap"
+              label="Insert signal"
+              @click="injectorOpen = true"
+            />
             <BotStateBadge :state="state" />
           </template>
         </PageHeader>
@@ -141,71 +158,87 @@ function fillField(record: ActivityRecord, key: string): unknown {
               label="Control desk"
               hint="Manual interventions. Kill switch still gates live execution."
             />
-            <div class="surface-card p-5 grid grid-cols-2 md:grid-cols-4 gap-2">
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-play"
-                label="Start"
-                block
-                @click="act(actions.startBot(botId))"
-              />
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-power"
-                label="Stop"
-                block
-                @click="act(actions.stopBot(botId))"
-              />
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-pause"
-                label="Pause"
-                block
-                @click="act(actions.pauseBot(botId))"
-              />
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-circle-play"
-                label="Resume"
-                block
-                @click="act(actions.resumeBot(botId))"
-              />
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-zap"
-                label="Tick once"
-                block
-                @click="act(actions.tickBot(botId))"
-              />
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-refresh-ccw"
-                label="Reconcile"
-                block
-                @click="act(actions.reconcileBot(botId))"
-              />
-              <UButton
-                color="error"
-                variant="outline"
-                icon="i-lucide-ban"
-                label="Cancel orders"
-                block
-                @click="act(actions.cancelOrders(botId))"
-              />
-              <UButton
-                color="error"
-                variant="outline"
-                icon="i-lucide-square-x"
-                label="Close positions"
-                block
-                @click="act(actions.closePositions(botId))"
-              />
+            <div class="surface-card p-5 space-y-2">
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-play"
+                  label="Start"
+                  block
+                  @click="act(actions.startBot(botId))"
+                />
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-power"
+                  label="Stop"
+                  block
+                  @click="act(actions.stopBot(botId))"
+                />
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-pause"
+                  label="Pause"
+                  block
+                  @click="act(actions.pauseBot(botId))"
+                />
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-circle-play"
+                  label="Resume"
+                  block
+                  @click="act(actions.resumeBot(botId))"
+                />
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-activity"
+                  label="Tick once"
+                  block
+                  @click="act(actions.tickBot(botId))"
+                />
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-refresh-ccw"
+                  label="Reconcile"
+                  block
+                  @click="act(actions.reconcileBot(botId))"
+                />
+                <UButton
+                  color="error"
+                  variant="outline"
+                  icon="i-lucide-ban"
+                  label="Cancel orders"
+                  block
+                  @click="act(actions.cancelOrders(botId))"
+                />
+                <UButton
+                  color="error"
+                  variant="outline"
+                  icon="i-lucide-square-x"
+                  label="Close positions"
+                  block
+                  @click="act(actions.closePositions(botId))"
+                />
+              </div>
+              <div class="pt-2 border-t border-[color:var(--color-hairline)] flex items-center gap-2">
+                <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Manual tools</div>
+                <UButton
+                  color="neutral"
+                  variant="soft"
+                  size="xs"
+                  icon="i-lucide-zap"
+                  label="Insert signal"
+                  @click="injectorOpen = true"
+                />
+                <span class="ml-auto text-[11px] text-ink-soft font-data">
+                  Bypasses indicator, keeps risk + execution intact.
+                </span>
+              </div>
             </div>
 
             <SectionHeader
@@ -375,6 +408,14 @@ function fillField(record: ActivityRecord, key: string): unknown {
             />
           </div>
         </section>
+        <SignalInjectorModal
+          v-model:open="injectorOpen"
+          :bot-id="botId"
+          :bot-label="detail?.display_name ?? botId"
+          :symbols="symbols"
+          :default-price="latestClose"
+          @applied="load"
+        />
       </div>
     </template>
   </UDashboardPanel>

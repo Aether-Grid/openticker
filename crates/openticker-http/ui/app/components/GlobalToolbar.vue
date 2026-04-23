@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { ServiceStatus } from '~/types/api'
 
 const props = defineProps<{
@@ -24,6 +25,27 @@ const lastLabel = computed(() => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 })
 const killOn = computed(() => props.status?.kill_switch_active === true)
+
+const INTERVALS = [2_000, 5_000, 15_000, 30_000, 60_000]
+const intervalItems = computed<DropdownMenuItem[][]>(() => [
+  INTERVALS.map((ms) => ({
+    label: `${(ms / 1000).toFixed(0)}s`,
+    icon: refresh.value.intervalMs === ms ? 'i-lucide-check' : 'i-lucide-clock',
+    onSelect: () => {
+      refresh.value.intervalMs = ms
+      refresh.value.enabled = true
+    }
+  })),
+  [
+    {
+      label: refresh.value.enabled ? 'Pause auto-refresh' : 'Resume auto-refresh',
+      icon: refresh.value.enabled ? 'i-lucide-pause' : 'i-lucide-play',
+      onSelect: () => {
+        refresh.value.enabled = !refresh.value.enabled
+      }
+    }
+  ]
+])
 </script>
 
 <template>
@@ -41,14 +63,19 @@ const killOn = computed(() => props.status?.kill_switch_active === true)
       <span class="text-ink-soft">Updated {{ lastLabel }}</span>
     </div>
 
-    <UButton
-      size="xs"
-      color="neutral"
-      variant="outline"
-      :icon="refresh.enabled ? 'i-lucide-pause' : 'i-lucide-play'"
-      :label="autoLabel"
-      @click="refresh.enabled = !refresh.enabled"
-    />
+    <UDropdownMenu
+      :items="intervalItems"
+      :ui="{ content: 'min-w-[160px]' }"
+    >
+      <UButton
+        size="xs"
+        color="neutral"
+        variant="outline"
+        :icon="refresh.enabled ? 'i-lucide-circle-play' : 'i-lucide-pause'"
+        :label="autoLabel"
+        trailing-icon="i-lucide-chevron-down"
+      />
+    </UDropdownMenu>
 
     <UButton
       size="xs"

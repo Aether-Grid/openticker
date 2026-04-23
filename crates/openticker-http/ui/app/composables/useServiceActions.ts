@@ -1,3 +1,25 @@
+import type { IndicatorSignalKind } from '~/types/api'
+
+export interface ManualSignalPayload {
+  signal: IndicatorSignalKind
+  price: number
+  timestamp: string
+  symbol?: string
+}
+
+export interface SimulateBarPayload {
+  bar: {
+    open: number
+    high: number
+    low: number
+    close: number
+    volume: number
+    timestamp: string
+  }
+  phase?: 'preview' | 'confirmed'
+  symbol?: string
+}
+
 export function useServiceActions() {
   const { api } = useApi()
   const toast = useToast()
@@ -27,6 +49,20 @@ export function useServiceActions() {
     cancelOrders: (id: string) =>
       run(`Cancel orders ${id}`, () => api(`/v1/bots/${id}/cancel-open-orders`, { method: 'POST' })),
     closePositions: (id: string) =>
-      run(`Close positions ${id}`, () => api(`/v1/bots/${id}/close-positions`, { method: 'POST' }))
+      run(`Close positions ${id}`, () => api(`/v1/bots/${id}/close-positions`, { method: 'POST' })),
+    manualSignal: (id: string, payload: ManualSignalPayload) =>
+      run(`Signal injected · ${id}`, () =>
+        api(`/v1/bots/${id}/manual-signal`, {
+          method: 'POST',
+          body: payload
+        })
+      ),
+    simulateBar: (id: string, payload: SimulateBarPayload) =>
+      run(`Bar simulated · ${id}`, () =>
+        api(`/v1/bots/${id}/simulate-bar`, {
+          method: 'POST',
+          body: payload
+        })
+      )
   }
 }

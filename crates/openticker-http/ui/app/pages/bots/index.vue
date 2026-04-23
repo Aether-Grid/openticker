@@ -86,6 +86,14 @@ const columns = [
   { key: 'actions', label: '', align: 'right' as const, width: '80px' }
 ]
 
+const injectorOpen = ref(false)
+const injectorTarget = shallowRef<BotSummary | null>(null)
+
+function openInjector(bot: BotSummary) {
+  injectorTarget.value = bot
+  injectorOpen.value = true
+}
+
 function rowActions(bot: BotSummary): DropdownMenuItem[][] {
   const state = (bot.state ?? '').toLowerCase()
   return [
@@ -99,10 +107,15 @@ function rowActions(bot: BotSummary): DropdownMenuItem[][] {
       },
       {
         label: 'Tick once',
-        icon: 'i-lucide-zap',
+        icon: 'i-lucide-activity',
         onSelect: () => {
           void actions.tickBot(bot.id).then(load)
         }
+      },
+      {
+        label: 'Insert signal...',
+        icon: 'i-lucide-zap',
+        onSelect: () => openInjector(bot)
       },
       {
         label: 'Reconcile',
@@ -349,6 +362,15 @@ async function bulkReconcile() {
             </template>
           </DataTable>
         </section>
+
+        <SignalInjectorModal
+          v-if="injectorTarget"
+          v-model:open="injectorOpen"
+          :bot-id="injectorTarget.id"
+          :bot-label="injectorTarget.display_name ?? injectorTarget.id"
+          :symbols="(injectorTarget.symbols ?? injectorTarget.tickers ?? []) as string[]"
+          @applied="load"
+        />
       </div>
     </template>
   </UDashboardPanel>

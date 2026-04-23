@@ -3,13 +3,17 @@
 
 @theme static {
   --font-sans: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
-  --font-display: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', 'Newsreader', 'Times New Roman', Georgia, serif;
+  --font-editorial-sans: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Geist Mono', 'SF Mono', ui-monospace, monospace;
 
   --color-canvas: #fbfbfa;
+  --color-paper: #ffffff;
   --color-ink: #111111;
   --color-ink-soft: #787774;
+  --color-ink-muted: #a4a29b;
   --color-hairline: #eaeaea;
+  --color-hairline-strong: #d8d8d3;
 
   --color-accent: #6366f1;
   --color-accent-strong: #4f46e5;
@@ -42,6 +46,7 @@
     font-family: var(--font-sans);
     color: var(--color-ink);
     font-feature-settings: 'ss01', 'cv11', 'tnum';
+    text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -55,6 +60,14 @@
 @layer utilities {
   .font-editorial {
     font-family: var(--font-display);
+    letter-spacing: -0.015em;
+    line-height: 1;
+    font-weight: 400;
+    font-feature-settings: 'ss01';
+  }
+
+  .font-editorial-sans {
+    font-family: var(--font-editorial-sans);
     letter-spacing: -0.035em;
     line-height: 1.05;
     font-weight: 500;
@@ -170,6 +183,33 @@
 
   .scroll-fade-mask {
     mask-image: linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
+  }
+
+  .ambient-paper {
+    background-image:
+      radial-gradient(1200px 400px at 100% -10%, var(--color-accent-softer) 0%, transparent 60%),
+      radial-gradient(800px 300px at 0% 120%, #fff7e6 0%, transparent 60%);
+  }
+
+  .skel {
+    display: block;
+    position: relative;
+    overflow: hidden;
+    background: color-mix(in oklch, var(--color-hairline) 70%, #fff);
+    border-radius: 6px;
+  }
+  .skel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+    transform: translateX(-100%);
+    animation: skelShimmer 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes skelShimmer {
+    100% {
+      transform: translateX(100%);
+    }
   }
 }
 

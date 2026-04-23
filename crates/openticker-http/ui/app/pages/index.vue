@@ -158,8 +158,9 @@ function connectorTone(state?: string): 'green' | 'yellow' | 'red' | 'neutral' {
             <div class="flex items-end gap-6 justify-between">
               <div class="flex-1 min-w-0">
                 <div
-                  class="font-editorial text-[64px] leading-[0.9] truncate"
+                  class="font-data tabular-nums text-[58px] leading-[0.9] truncate font-medium"
                   :class="pnlColor(totalPnl)"
+                  style="letter-spacing: -0.035em"
                 >
                   {{ fmtPnL(totalPnl) }}
                 </div>

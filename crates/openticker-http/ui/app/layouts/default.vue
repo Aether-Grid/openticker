@@ -23,7 +23,7 @@ useIntervalFn(() => {
   now.value = new Date()
 }, 1000)
 
-const items = computed<NavigationMenuItem[]>(() => [
+const items = computed<NavigationMenuItem[][]>(() => [
   [
     {
       label: 'Overview',
@@ -78,6 +78,10 @@ const items = computed<NavigationMenuItem[]>(() => [
   ]
 ])
 
+const collapsedItems = computed<NavigationMenuItem[][]>(() =>
+  items.value.map((group) => group.map(({ badge: _badge, ...rest }) => rest))
+)
+
 const killSwitchOn = computed(() => status.value?.kill_switch_active === true)
 const ready = computed(() => status.value?.ready === true)
 const utcClock = computed(() => {
@@ -85,44 +89,61 @@ const utcClock = computed(() => {
   const pad = (n: number) => n.toString().padStart(2, '0')
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`
 })
+
+const paletteOpen = ref(false)
 </script>
 
 <template>
   <UDashboardGroup
     unit="px"
+    :persistent="false"
     class="min-h-screen surface-canvas"
   >
     <UDashboardSidebar
+      id="main"
       collapsible
-      resizable
+      :default-size="264"
+      :min-size="220"
+      :max-size="320"
+      :collapsed-size="64"
+      :ui="{
+        root: 'overflow-x-hidden data-[collapsed=false]:!w-[264px] data-[collapsed=true]:!w-16 data-[collapsed=true]:!min-w-16',
+        header: 'data-[collapsed=true]:px-0 data-[collapsed=true]:justify-center',
+        body: 'data-[collapsed=true]:px-0',
+        footer: 'data-[collapsed=true]:px-0 data-[collapsed=true]:justify-center'
+      }"
       class="border-r border-[color:var(--color-hairline)] bg-white"
     >
-      <template #header="{ collapsed }">
+      <template #header="{ collapsed, collapse }">
         <NuxtLink
           to="/"
-          class="flex items-center gap-2.5 px-1 py-1 select-none"
+          class="flex items-center gap-2.5 min-w-0 select-none flex-1"
+          :class="collapsed ? 'justify-center' : ''"
         >
           <div
-            class="w-7 h-7 rounded-md grid place-items-center font-editorial text-[15px] leading-none text-white"
+            class="w-7 h-7 shrink-0 rounded-md grid place-items-center font-editorial text-[18px] leading-none text-white italic"
             style="background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-strong) 100%)"
           >
             O
           </div>
           <div
             v-if="!collapsed"
-            class="leading-tight"
+            class="leading-tight min-w-0"
           >
-            <div class="font-editorial text-[17px] tracking-tight text-ink">OpenTicker</div>
-            <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Control Workspace</div>
+            <div class="font-editorial text-[22px] tracking-tight text-ink truncate">OpenTicker</div>
+            <div class="text-[10px] uppercase tracking-[0.16em] text-ink-soft font-data truncate">
+              Control Workspace
+            </div>
           </div>
         </NuxtLink>
       </template>
 
       <template #default="{ collapsed }">
         <UNavigationMenu
-          :items="items"
+          :items="collapsed ? collapsedItems : items"
           orientation="vertical"
           :collapsed="collapsed"
+          :tooltip="collapsed"
           :ui="{
             link: 'rounded-md text-[13.5px] tracking-tight data-[active=true]:bg-[color:var(--color-accent-soft)] data-[active=true]:text-[color:var(--color-accent-ink)] hover:bg-[color:var(--color-canvas)]',
             linkLeadingIcon: 'size-4 data-[active=true]:text-[color:var(--color-accent-strong)]',
@@ -132,9 +153,23 @@ const utcClock = computed(() => {
           }"
         />
 
+        <button
+          v-if="!collapsed"
+          type="button"
+          class="mt-3 mx-2 w-[calc(100%-1rem)] flex items-center gap-2 px-3 py-2 rounded-md border border-[color:var(--color-hairline)] bg-white hover:border-[color:var(--color-hairline-strong)] transition-colors group"
+          @click="paletteOpen = true"
+        >
+          <UIcon
+            name="i-lucide-search"
+            class="size-3.5 text-ink-soft"
+          />
+          <span class="text-[12px] text-ink-soft flex-1 text-left">Quick find</span>
+          <kbd class="kbd text-[10px]">⌘K</kbd>
+        </button>
+
         <div
           v-if="!collapsed"
-          class="mt-6 px-2 space-y-3"
+          class="mt-5 px-2 space-y-3"
         >
           <div class="text-[10px] uppercase tracking-[0.16em] text-ink-soft font-data px-2">Runtime</div>
           <div class="grid grid-cols-2 gap-1.5 px-1">
@@ -180,17 +215,27 @@ const utcClock = computed(() => {
         </div>
       </template>
 
-      <template #footer="{ collapsed }">
+      <template #footer="{ collapsed, collapse }">
         <div
           v-if="!collapsed"
-          class="text-[10px] uppercase tracking-[0.16em] text-ink-soft font-data text-center py-1"
+          class="text-[10px] uppercase tracking-[0.16em] text-ink-soft font-data text-center py-1 flex-1"
         >
           {{ utcClock }}
         </div>
-        <UDashboardSidebarCollapse v-else />
+        <UButton
+          v-else
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          icon="i-lucide-panel-left-open"
+          aria-label="Expand sidebar"
+          @click="collapse(false)"
+        />
       </template>
     </UDashboardSidebar>
 
     <slot />
+
+    <CommandPalette v-model:open="paletteOpen" />
   </UDashboardGroup>
 </template>
