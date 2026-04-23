@@ -1,0 +1,33 @@
+# Canonical equities experiment bot for AAPL and MSFT.
+id = "equities-5m-single-sbs-sens-2p0"
+enabled = true
+allow_live = false
+market = "equities"
+symbols = ["AAPL", "MSFT", "COIN", "PLTR", "TSLA"]
+timeframe = "5m"
+account = "alpaca-paper"
+data_connector = "alpaca"
+execution_connector = "alpaca"
+strategy = "single_indicator_signal"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 30000
+
+[[indicators]]
+id = "sbs-1"
+type = "strong_buy_strong_sell"
+enabled = true
+role = "primary_signal"
+signal_policy = "confirmed_required"
+
+[indicators.params]
+sensitivity = 2.0
+
+[budget]
+pct = 10.0
+
+[risk]
+profile = "equities-default"
+
+[risk.overrides]
+target_order_notional_usd = 200.0

@@ -1,9 +1,6 @@
-# Strong-only directional bot template.
-#
-# This template enables metadata-based entry filtering immediately. It will only open/add
-# positions when the indicator emits `strength = "strong"`. Exit filtering remains permissive.
+# Momentum Ultima Plus bot template.
 
-id = "equities-basket-strong-only-paper"
+id = "equities-basket-momentum-ultima-plus-paper"
 enabled = true
 allow_live = false
 market = "equities"
@@ -16,27 +13,36 @@ execution_connector = "alpaca"
 strategy = "single_indicator_signal"
 signal_mode = "confirmed_only"
 polling_enabled = true
-polling_interval_ms = 1500
+polling_interval_ms = 1000
+
+# Optional warmup override.
+# warmup_target_bars = 200
 
 [[indicators]]
-id = "trend-1"
-type = "strong_buy_strong_sell"
+id = "ultima-1"
+type = "momentum_ultima_plus"
 enabled = true
 role = "primary_signal"
 signal_policy = "confirmed_required"
 
+# Optional metadata-aware trade gating.
 [indicators.metadata_filters.entry]
-allowed_strengths = ["strong"]
+# allowed_strengths = ["strong"]
+# allowed_reason_codes = ["supertrend_cross_up_sma_filter"]
+# required_tags_any = ["buy", "strong"]
 
 [indicators.metadata_filters.exit]
-allowed_strengths = ["normal", "strong"]
+# allowed_strengths = ["normal", "strong"]
+# allowed_reason_codes = ["supertrend_cross_down_sma_filter"]
+# required_tags_any = ["sell"]
 
 [indicators.params]
-sensitivity = 2.0
+# Runtime-recognized for momentum_ultima_plus.
+sensitivity = 4.0
 
 [budget]
 # Shared across all lanes for this bot.
-pct = 12.5
+pct = 10.0
 
 [risk]
 profile = "equities-default"
@@ -44,8 +50,10 @@ profile = "equities-default"
 [risk.overrides]
 
 stale_data_ms = 30000
-# max_order_notional_usd = 1600.0
+# target_order_notional_usd = 2000.0
+# max_order_notional_usd = 2500.0
 
 [execution_constraints]
 # quantity_step = 1.0
 # min_quantity = 1.0
+# min_notional_usd = 10.0

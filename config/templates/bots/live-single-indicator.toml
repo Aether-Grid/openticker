@@ -26,7 +26,7 @@ polling_interval_ms = 1000
 
 [[indicators]]
 id = "trend-1"
-type = "sma_crossover"
+type = "strong_buy_strong_sell"
 enabled = true
 role = "primary_signal"
 signal_policy = "confirmed_required"
@@ -39,8 +39,7 @@ signal_policy = "confirmed_required"
 # allowed_strengths = ["normal", "strong"]
 
 [indicators.params]
-fast_length = 10
-slow_length = 30
+sensitivity = 2.0
 
 [budget]
 # Shared across all lanes for this bot.

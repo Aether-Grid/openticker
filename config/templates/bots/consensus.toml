@@ -20,12 +20,12 @@ polling_interval_ms = 1000
 
 [[indicators]]
 id = "primary-1"
-type = "sma_crossover"
+type = "strong_buy_strong_sell"
 enabled = true
 role = "primary_signal"
 signal_policy = "confirmed_required"
 weight = 1.0
-params = { fast_length = 10, slow_length = 30 }
+params = { sensitivity = 2.0 }
 
 [indicators.metadata_filters.entry]
 # allowed_strengths = ["strong"]
@@ -35,18 +35,18 @@ params = { fast_length = 10, slow_length = 30 }
 
 [[indicators]]
 id = "filter-1"
-type = "rsi_threshold"
+type = "momentum_trend_predictor"
 enabled = true
 role = "filter"
 signal_policy = "confirmed_required"
 weight = 0.5
-params = { period = 14, oversold = 30.0, overbought = 70.0 }
+params = { rsi_period = 20, slow_factor = 5, qqe = 4.236 }
 
 [indicators.metadata_filters.entry]
-# allowed_reason_codes = ["rsi_recovery_from_oversold"]
+# allowed_reason_codes = ["qqe_cross_up"]
 
 [indicators.metadata_filters.exit]
-# allowed_reason_codes = ["rsi_drop_from_overbought"]
+# allowed_reason_codes = ["qqe_cross_down"]
 
 [budget]
 # Shared across all lanes for this bot.

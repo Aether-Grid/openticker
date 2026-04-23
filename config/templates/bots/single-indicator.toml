@@ -34,7 +34,7 @@ polling_interval_ms = 1000
 
 [[indicators]]
 id = "primary-1"
-type = "sma_crossover"
+type = "strong_buy_strong_sell"
 
 # Schema default: true
 enabled = true
@@ -53,14 +53,14 @@ signal_policy = "confirmed_required"
 # Optional metadata-aware trade gating.
 [indicators.metadata_filters.entry]
 # allowed_strengths = ["strong"]
-# allowed_reason_codes = ["sma_cross_up"]
+# allowed_reason_codes = ["supertrend_cross_up_sma_filter"]
 # required_tags_all = ["bullish"]
 # required_tags_any = ["trend", "bullish"]
 # blocked_tags = ["hidden"]
 
 [indicators.metadata_filters.exit]
 # allowed_strengths = ["normal", "strong"]
-# allowed_reason_codes = ["sma_cross_down"]
+# allowed_reason_codes = ["supertrend_cross_down_sma_filter"]
 # required_tags_all = ["bearish"]
 # required_tags_any = ["trend", "bearish"]
 # blocked_tags = ["hidden"]
@@ -68,14 +68,13 @@ signal_policy = "confirmed_required"
 [indicators.params]
 # Runtime-recognized params depend on indicator type.
 #
-# sma_crossover:
-fast_length = 10
-slow_length = 30
+# strong_buy_strong_sell / momentum_ultima_plus / mom_algo_15:
+sensitivity = 2.0
 #
-# rsi_threshold:
-# period = 14
-# oversold = 30.0
-# overbought = 70.0
+# momentum_trend_predictor:
+# rsi_period = 20
+# slow_factor = 5
+# qqe = 4.236
 
 [budget]
 # Shared across all lanes for this bot.

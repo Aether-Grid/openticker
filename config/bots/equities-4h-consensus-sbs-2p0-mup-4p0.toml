@@ -1,0 +1,41 @@
+# Canonical equities experiment bot for AAPL and MSFT.
+id = "equities-4h-consensus-sbs-2p0-mup-4p0"
+enabled = true
+allow_live = false
+market = "equities"
+symbols = ["AAPL", "MSFT", "COIN", "PLTR", "TSLA"]
+timeframe = "4h"
+account = "alpaca-paper"
+data_connector = "alpaca"
+execution_connector = "alpaca"
+strategy = "consensus"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 900000
+
+[[indicators]]
+id = "sbs-1"
+type = "strong_buy_strong_sell"
+enabled = true
+role = "primary_signal"
+signal_policy = "confirmed_required"
+weight = 1.0
+params = { sensitivity = 2.0 }
+
+[[indicators]]
+id = "mup-1"
+type = "momentum_ultima_plus"
+enabled = true
+role = "primary_signal"
+signal_policy = "confirmed_required"
+weight = 1.0
+params = { sensitivity = 4.0 }
+
+[budget]
+pct = 10.0
+
+[risk]
+profile = "equities-default"
+
+[risk.overrides]
+target_order_notional_usd = 200.0

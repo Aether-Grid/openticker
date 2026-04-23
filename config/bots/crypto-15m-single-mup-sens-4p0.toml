@@ -1,0 +1,33 @@
+# Canonical crypto experiment bot for BTCUSDT and ETHUSDT.
+id = "crypto-15m-single-mup-sens-4p0"
+enabled = true
+allow_live = false
+market = "crypto"
+symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "PEPEUSDT"]
+timeframe = "15m"
+account = "binance-demo"
+data_connector = "binance"
+execution_connector = "binance"
+strategy = "single_indicator_signal"
+signal_mode = "intrabar"
+polling_enabled = true
+polling_interval_ms = 1000
+
+[[indicators]]
+id = "mup-1"
+type = "momentum_ultima_plus"
+enabled = true
+role = "primary_signal"
+signal_policy = "preview_allowed"
+
+[indicators.params]
+sensitivity = 4.0
+
+[budget]
+pct = 10.0
+
+[risk]
+profile = "crypto-default"
+
+[risk.overrides]
+target_order_notional_usd = 200.0
