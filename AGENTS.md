@@ -38,7 +38,8 @@ Important crate roles:
 
 - `openticker-core`: shared domain types
 - `openticker-config`: config schema and validation
-- `openticker-signals`: indicator implementations and manifest metadata
+- `openticker-registry`: build-specific registry and optional extension aggregation
+- `openticker-signals`: indicator contracts, shared helpers, and built-in indicators
 - `openticker-strategy`: signal-to-intent mapping
 - `openticker-risk`: pure risk policy
 - `openticker-data`: normalized market-data transformation
@@ -72,7 +73,7 @@ This repository intentionally omits the internal planning and audit docs that us
 - `openticker-runtime` is the composition root and contains most orchestration.
 - `openticker-dataplane` owns stream registry, polling cadence, and per-stream buffers.
 - `openticker-http` owns the HTTP API and wires the dataplane task into the running service.
-- `openticker-signals` owns manifest metadata, but runtime indicator construction is still manual in `openticker-runtime`.
+- `openticker-registry` owns the build-specific catalog used by config validation and runtime assembly.
 - `openticker-config` duplicates some connector capability knowledge that also exists conceptually in `openticker-connectors`.
 - `openticker-storage` is the audit and restart substrate for the runtime.
 
@@ -80,11 +81,10 @@ This repository intentionally omits the internal planning and audit docs that us
 
 ### Add a new indicator
 
-1. Implement the indicator in `openticker-signals`.
-2. Add or update the manifest entry there.
-3. Update config validation in `openticker-config` if the indicator introduces new rules or parameters.
-4. Wire runtime instantiation in `openticker-runtime`.
-5. Add or update tests in the signals crate and runtime integration tests if behavior affects orchestration.
+1. Implement the indicator in `openticker-signals` for public built-ins or in `openticker-indicators` for private extensions.
+2. Register its descriptor in the owning crate.
+3. Update config validation in `openticker-config` only if the indicator introduces new rules or parameters beyond manifest metadata.
+4. Add or update tests in the owning indicator crate and runtime integration tests if behavior affects orchestration.
 
 ### Add a new connector
 

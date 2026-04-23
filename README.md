@@ -89,8 +89,10 @@ These are enough to exercise the full config, runtime, strategy, HTTP, and test 
 
 - `openticker-core`: shared domain types
 - `openticker-config`: config schema, loading, validation, and effective-config output
+- `openticker-registry`: build-specific catalog and engine construction surface
+- `openticker-indicators`: extension hook crate for private indicator packs
 - `openticker-instance`: config-driven indicator and strategy assembly
-- `openticker-signals`: indicator contracts, manifests, shared math helpers, and built-in indicators
+- `openticker-signals`: indicator contracts, shared math helpers, and built-in default/example indicators
 - `openticker-strategy`: signal-to-intent mapping
 - `openticker-risk`: pure risk policy
 - `openticker-data`: normalized market-data helpers

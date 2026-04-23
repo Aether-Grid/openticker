@@ -1,5 +1,6 @@
 /target/
-.idea/
+/var
+/.idea
+/docs
 .DS_Store
 .env
-var/
