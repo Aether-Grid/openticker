@@ -7,24 +7,25 @@ fn main() {
 
     let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
         .expect("CARGO_MANIFEST_DIR is always set for crate build scripts");
-    let static_dir = Path::new(&manifest_dir).join("static");
-    let embedded_dashboard = static_dir.join("dist").join("index.html");
+    let ui_dir = Path::new(&manifest_dir).join("ui");
+    let dist_dir = ui_dir.join(".output").join("public");
+    let embedded_shell = dist_dir.join("index.html");
 
     assert!(
-        embedded_dashboard.exists(),
-        "missing embedded dashboard asset at {}. run `npm ci` and `npm run build` in {}",
-        embedded_dashboard.display(),
-        static_dir.display()
+        embedded_shell.exists(),
+        "missing Nuxt SPA shell at {}. Run `pnpm install && pnpm build` in {}",
+        embedded_shell.display(),
+        ui_dir.display()
     );
 
     for path in [
-        static_dir.join("package.json"),
-        static_dir.join("package-lock.json"),
-        static_dir.join("astro.config.mjs"),
-        static_dir.join("tsconfig.json"),
-        static_dir.join("src"),
-        static_dir.join("public"),
-        static_dir.join("dist"),
+        ui_dir.join("package.json"),
+        ui_dir.join("pnpm-lock.yaml"),
+        ui_dir.join("nuxt.config.ts"),
+        ui_dir.join("tsconfig.json"),
+        ui_dir.join("app"),
+        ui_dir.join("public"),
+        dist_dir.clone(),
     ] {
         emit_rerun_if_changed(&path);
     }

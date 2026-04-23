@@ -1,9 +1,7 @@
 use crate::constants::{
     BOT_SNAPSHOT_ORDERS_LIMIT, BOT_SNAPSHOT_POSITIONS_LIMIT, BOT_SNAPSHOT_TIMELINE_LIMIT,
-    DASHBOARD_ACTIVITY_HTML, DASHBOARD_BOTS_HTML, DASHBOARD_CONFIG_HTML, DASHBOARD_CONNECTORS_HTML,
-    DASHBOARD_CYCLE_DETAIL_HTML, DASHBOARD_CYCLES_HTML, DASHBOARD_FEEDS_HTML, DASHBOARD_HTML,
-    DASHBOARD_PORTFOLIO_HTML, DASHBOARD_PROVIDERS_HTML, DASHBOARD_SNAPSHOT_DEFAULT_LIMIT,
-    DEFAULT_STREAM_BARS_LIMIT, STREAM_SPARKLINE_LIMIT, generated_openapi_spec,
+    DASHBOARD_HTML, DASHBOARD_SNAPSHOT_DEFAULT_LIMIT, DEFAULT_STREAM_BARS_LIMIT,
+    STREAM_SPARKLINE_LIMIT, UI_DIST, generated_openapi_spec,
 };
 use crate::state::{
     DashboardBotSnapshot, DashboardHomeSnapshot, DashboardRiskDecisionsSnapshot, ErrorResponse,
@@ -64,40 +62,63 @@ pub(crate) async fn dashboard_handler() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
 }
 
-pub(crate) async fn dashboard_activity_handler() -> Html<&'static str> {
-    Html(DASHBOARD_ACTIVITY_HTML)
+pub(crate) async fn ui_asset_handler(uri: axum::http::Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if let Some(file) = UI_DIST.get_file(path) {
+        let mime = guess_ui_asset_mime(path);
+        let cache_control = ui_asset_cache_header(path);
+        (
+            [
+                (axum::http::header::CONTENT_TYPE, mime),
+                (axum::http::header::CACHE_CONTROL, cache_control),
+            ],
+            file.contents(),
+        )
+            .into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
 }
 
-pub(crate) async fn dashboard_bots_handler() -> Html<&'static str> {
-    Html(DASHBOARD_BOTS_HTML)
+pub(crate) async fn favicon_handler() -> Response {
+    if let Some(file) = UI_DIST.get_file("favicon.ico") {
+        (
+            [(axum::http::header::CONTENT_TYPE, "image/x-icon")],
+            file.contents(),
+        )
+            .into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
 }
 
-pub(crate) async fn dashboard_config_handler() -> Html<&'static str> {
-    Html(DASHBOARD_CONFIG_HTML)
+fn guess_ui_asset_mime(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
+        "json" | "map" => "application/json; charset=utf-8",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
-pub(crate) async fn dashboard_connectors_handler() -> Html<&'static str> {
-    Html(DASHBOARD_CONNECTORS_HTML)
-}
-
-pub(crate) async fn dashboard_cycles_handler() -> Html<&'static str> {
-    Html(DASHBOARD_CYCLES_HTML)
-}
-
-pub(crate) async fn dashboard_cycle_detail_handler() -> Html<&'static str> {
-    Html(DASHBOARD_CYCLE_DETAIL_HTML)
-}
-
-pub(crate) async fn dashboard_feeds_handler() -> Html<&'static str> {
-    Html(DASHBOARD_FEEDS_HTML)
-}
-
-pub(crate) async fn dashboard_providers_handler() -> Html<&'static str> {
-    Html(DASHBOARD_PROVIDERS_HTML)
-}
-
-pub(crate) async fn dashboard_portfolio_handler() -> Html<&'static str> {
-    Html(DASHBOARD_PORTFOLIO_HTML)
+fn ui_asset_cache_header(path: &str) -> &'static str {
+    // Nuxt emits content-hashed files under _nuxt/ and _fonts/; these are safe to cache aggressively.
+    if path.starts_with("_nuxt/") || path.starts_with("_fonts/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=300"
+    }
 }
 
 pub(crate) async fn health_handler() -> Json<HealthResponse> {

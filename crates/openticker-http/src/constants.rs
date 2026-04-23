@@ -1,3 +1,4 @@
+use include_dir::{Dir, include_dir};
 use serde_json::json;
 use std::sync::OnceLock;
 
@@ -12,9 +13,9 @@ pub const DASHBOARD_BOT_DETAIL_PATH: &str = "/bots/{id}";
 pub const DASHBOARD_CONFIG_PATH: &str = "/config";
 pub const DASHBOARD_CONNECTORS_PATH: &str = "/connectors";
 pub const DASHBOARD_CYCLES_PATH: &str = "/cycles";
-pub const DASHBOARD_CYCLE_DETAIL_PATH: &str = "/cycles/{trace_id}";
+pub const DASHBOARD_CYCLE_DETAIL_PATH: &str = "/cycles/{bot_id}/{trace_id}";
 pub const DASHBOARD_FEEDS_PATH: &str = "/feeds";
-pub const DASHBOARD_FEED_DETAIL_PATH: &str = "/feeds/{key}";
+pub const DASHBOARD_FEED_DETAIL_PATH: &str = "/feeds/{account}/{symbol}/{timeframe}";
 pub const DASHBOARD_PROVIDERS_PATH: &str = "/providers";
 pub const DASHBOARD_PORTFOLIO_PATH: &str = "/portfolio";
 pub const DASHBOARD_SNAPSHOT_PATH: &str = "/v1/dashboard/snapshot";
@@ -56,17 +57,9 @@ pub const BOT_RECONCILE_PATH: &str = "/v1/bots/{id}/reconcile";
 pub const BOT_CANCEL_OPEN_ORDERS_PATH: &str = "/v1/bots/{id}/cancel-open-orders";
 pub const BOT_CLOSE_POSITIONS_PATH: &str = "/v1/bots/{id}/close-positions";
 
-pub(crate) const DASHBOARD_HTML: &str = include_str!("../static/dist/index.html");
-pub(crate) const DASHBOARD_ACTIVITY_HTML: &str = include_str!("../static/dist/activity.html");
-pub(crate) const DASHBOARD_BOTS_HTML: &str = include_str!("../static/dist/bots.html");
-pub(crate) const DASHBOARD_CONFIG_HTML: &str = include_str!("../static/dist/config.html");
-pub(crate) const DASHBOARD_CONNECTORS_HTML: &str = include_str!("../static/dist/connectors.html");
-pub(crate) const DASHBOARD_CYCLES_HTML: &str = include_str!("../static/dist/cycles.html");
-pub(crate) const DASHBOARD_CYCLE_DETAIL_HTML: &str =
-    include_str!("../static/dist/cycles-detail.html");
-pub(crate) const DASHBOARD_FEEDS_HTML: &str = include_str!("../static/dist/feeds.html");
-pub(crate) const DASHBOARD_PROVIDERS_HTML: &str = include_str!("../static/dist/providers.html");
-pub(crate) const DASHBOARD_PORTFOLIO_HTML: &str = include_str!("../static/dist/portfolio.html");
+pub(crate) static UI_DIST: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/ui/.output/public");
+pub(crate) const DASHBOARD_HTML: &str = include_str!("../ui/.output/public/index.html");
+
 pub(crate) const STREAM_SPARKLINE_LIMIT: usize = 30;
 pub(crate) const DEFAULT_STREAM_BARS_LIMIT: usize = 100;
 pub(crate) const DASHBOARD_SNAPSHOT_DEFAULT_LIMIT: usize = 60;
@@ -95,57 +88,57 @@ pub(crate) const HTTP_SURFACE_ROUTES: &[HttpRouteDescriptor] = &[
     HttpRouteDescriptor {
         path: DASHBOARD_ACTIVITY_PATH,
         method: "get",
-        operation_id: "dashboard_activity_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_BOTS_PATH,
         method: "get",
-        operation_id: "dashboard_bots_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_BOT_DETAIL_PATH,
         method: "get",
-        operation_id: "dashboard_bots_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_CONFIG_PATH,
         method: "get",
-        operation_id: "dashboard_config_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_CONNECTORS_PATH,
         method: "get",
-        operation_id: "dashboard_connectors_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_CYCLES_PATH,
         method: "get",
-        operation_id: "dashboard_cycles_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_CYCLE_DETAIL_PATH,
         method: "get",
-        operation_id: "dashboard_cycle_detail_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_FEEDS_PATH,
         method: "get",
-        operation_id: "dashboard_feeds_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_FEED_DETAIL_PATH,
         method: "get",
-        operation_id: "dashboard_feeds_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_PROVIDERS_PATH,
         method: "get",
-        operation_id: "dashboard_providers_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_PORTFOLIO_PATH,
         method: "get",
-        operation_id: "dashboard_portfolio_handler",
+        operation_id: "dashboard_handler",
     },
     HttpRouteDescriptor {
         path: DASHBOARD_SNAPSHOT_PATH,

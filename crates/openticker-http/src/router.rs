@@ -16,12 +16,9 @@ use crate::constants::{
 use crate::handlers::{
     bot_reconciliation_report_handler, bot_snapshot_handler, cancel_bot_open_orders_handler,
     close_bot_positions_handler, config_effective_handler, config_reload_handler,
-    connectors_matrix_handler, connectors_status_handler, dashboard_activity_handler,
-    dashboard_bots_handler, dashboard_config_handler, dashboard_connectors_handler,
-    dashboard_cycle_detail_handler, dashboard_cycles_handler, dashboard_feeds_handler,
-    dashboard_handler, dashboard_portfolio_handler, dashboard_providers_handler,
+    connectors_matrix_handler, connectors_status_handler, dashboard_handler,
     dashboard_snapshot_handler, disable_kill_switch_handler, enable_kill_switch_handler,
-    get_bot_cycle_handler, get_bot_handler, get_bot_lanes_handler, health_handler,
+    favicon_handler, get_bot_cycle_handler, get_bot_handler, get_bot_lanes_handler, health_handler,
     ledger_accounts_handler, ledger_bots_handler, ledger_handler, ledger_lanes_handler,
     list_bot_cycles_handler, list_bots_handler, list_data_stream_bars_handler,
     list_data_stream_history_handler, list_data_streams_handler, list_events_handler,
@@ -30,6 +27,7 @@ use crate::handlers::{
     manual_bot_signal_handler, metrics_handler, openapi_handler, pause_bot_handler, ready_handler,
     reconcile_bot_handler, resume_bot_handler, service_status_handler, simulate_bot_bar_handler,
     simulate_bot_trade_handler, start_bot_handler, stop_bot_handler, tick_bot_handler,
+    ui_asset_handler,
 };
 use crate::state::HttpState;
 use axum::Router;
@@ -41,22 +39,29 @@ use tracing::Level;
 
 pub fn build_router(state: HttpState) -> Router {
     Router::new()
+        // Dashboard SPA shell — every frontend route serves the same index.html;
+        // Vue Router takes over on the client.
         .route("/", get(dashboard_handler))
         .route(DASHBOARD_PATH, get(dashboard_handler))
-        .route(DASHBOARD_ACTIVITY_PATH, get(dashboard_activity_handler))
-        .route(DASHBOARD_BOTS_PATH, get(dashboard_bots_handler))
-        .route(DASHBOARD_BOT_DETAIL_PATH, get(dashboard_bots_handler))
-        .route(DASHBOARD_CONFIG_PATH, get(dashboard_config_handler))
-        .route(DASHBOARD_CONNECTORS_PATH, get(dashboard_connectors_handler))
-        .route(DASHBOARD_CYCLES_PATH, get(dashboard_cycles_handler))
-        .route(
-            DASHBOARD_CYCLE_DETAIL_PATH,
-            get(dashboard_cycle_detail_handler),
-        )
-        .route(DASHBOARD_FEEDS_PATH, get(dashboard_feeds_handler))
-        .route(DASHBOARD_FEED_DETAIL_PATH, get(dashboard_feeds_handler))
-        .route(DASHBOARD_PROVIDERS_PATH, get(dashboard_providers_handler))
-        .route(DASHBOARD_PORTFOLIO_PATH, get(dashboard_portfolio_handler))
+        .route(DASHBOARD_ACTIVITY_PATH, get(dashboard_handler))
+        .route(DASHBOARD_BOTS_PATH, get(dashboard_handler))
+        .route(DASHBOARD_BOT_DETAIL_PATH, get(dashboard_handler))
+        .route(DASHBOARD_CONFIG_PATH, get(dashboard_handler))
+        .route(DASHBOARD_CONNECTORS_PATH, get(dashboard_handler))
+        .route(DASHBOARD_CYCLES_PATH, get(dashboard_handler))
+        .route(DASHBOARD_CYCLE_DETAIL_PATH, get(dashboard_handler))
+        .route(DASHBOARD_FEEDS_PATH, get(dashboard_handler))
+        .route(DASHBOARD_FEED_DETAIL_PATH, get(dashboard_handler))
+        .route(DASHBOARD_PROVIDERS_PATH, get(dashboard_handler))
+        .route(DASHBOARD_PORTFOLIO_PATH, get(dashboard_handler))
+        // Static UI assets emitted by `pnpm build` into ui/.output/public.
+        .route("/_nuxt/{*path}", get(ui_asset_handler))
+        .route("/_fonts/{*path}", get(ui_asset_handler))
+        .route("/favicon.ico", get(favicon_handler))
+        // Fallback — treat any unknown path as an SPA route. API namespaces below
+        // are matched first because they're registered explicitly.
+        .fallback(get(dashboard_handler))
+        // JSON / text APIs
         .route(DASHBOARD_SNAPSHOT_PATH, get(dashboard_snapshot_handler))
         .route(HEALTH_PATH, get(health_handler))
         .route(READY_PATH, get(ready_handler))

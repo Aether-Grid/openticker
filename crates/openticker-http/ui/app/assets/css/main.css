@@ -1,0 +1,179 @@
+@import 'tailwindcss';
+@import '@nuxt/ui';
+
+@theme static {
+  --font-sans: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
+  --font-display: 'Geist', 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Geist Mono', 'SF Mono', ui-monospace, monospace;
+
+  --color-canvas: #fbfbfa;
+  --color-ink: #111111;
+  --color-ink-soft: #787774;
+  --color-hairline: #eaeaea;
+
+  --color-accent: #6366f1;
+  --color-accent-strong: #4f46e5;
+  --color-accent-soft: #eef2ff;
+  --color-accent-softer: #f5f3ff;
+  --color-accent-ink: #3730a3;
+
+  --color-pastel-red: #fee2e2;
+  --color-pastel-red-ink: #b42318;
+  --color-pastel-blue: #dbeafe;
+  --color-pastel-blue-ink: #1d4ed8;
+  --color-pastel-green: #dcfce7;
+  --color-pastel-green-ink: #15803d;
+  --color-pastel-yellow: #fef3c7;
+  --color-pastel-yellow-ink: #b45309;
+  --color-pastel-violet: #ede9fe;
+  --color-pastel-violet-ink: #5b21b6;
+  --color-pastel-orange: #ffedd5;
+  --color-pastel-orange-ink: #c2410c;
+  --color-pastel-teal: #ccfbf1;
+  --color-pastel-teal-ink: #0f766e;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-ink);
+    font-feature-settings: 'ss01', 'cv11', 'tnum';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :root {
+    --ui-border: var(--color-hairline);
+    --ui-border-muted: var(--color-hairline);
+  }
+}
+
+@layer utilities {
+  .font-editorial {
+    font-family: var(--font-display);
+    letter-spacing: -0.035em;
+    line-height: 1.05;
+    font-weight: 500;
+  }
+
+  .font-data {
+    font-family: var(--font-mono);
+    font-feature-settings: 'tnum', 'ss01';
+  }
+
+  .text-ink {
+    color: var(--color-ink);
+  }
+  .text-ink-soft {
+    color: var(--color-ink-soft);
+  }
+
+  .hairline-b {
+    border-bottom: 1px solid var(--color-hairline);
+  }
+  .hairline-t {
+    border-top: 1px solid var(--color-hairline);
+  }
+  .hairline-r {
+    border-right: 1px solid var(--color-hairline);
+  }
+  .hairline-l {
+    border-left: 1px solid var(--color-hairline);
+  }
+  .hairline {
+    border: 1px solid var(--color-hairline);
+  }
+
+  .surface-canvas {
+    background-color: var(--color-canvas);
+  }
+  .surface-card {
+    background-color: #ffffff;
+    border: 1px solid var(--color-hairline);
+    border-radius: 12px;
+  }
+
+  .pastel-red {
+    background-color: var(--color-pastel-red);
+    color: var(--color-pastel-red-ink);
+  }
+  .pastel-blue {
+    background-color: var(--color-pastel-blue);
+    color: var(--color-pastel-blue-ink);
+  }
+  .pastel-green {
+    background-color: var(--color-pastel-green);
+    color: var(--color-pastel-green-ink);
+  }
+  .pastel-yellow {
+    background-color: var(--color-pastel-yellow);
+    color: var(--color-pastel-yellow-ink);
+  }
+  .pastel-violet {
+    background-color: var(--color-pastel-violet);
+    color: var(--color-pastel-violet-ink);
+  }
+  .pastel-orange {
+    background-color: var(--color-pastel-orange);
+    color: var(--color-pastel-orange-ink);
+  }
+  .pastel-teal {
+    background-color: var(--color-pastel-teal);
+    color: var(--color-pastel-teal-ink);
+  }
+  .pastel-accent {
+    background-color: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+  }
+
+  .text-accent {
+    color: var(--color-accent-strong);
+  }
+  .bg-accent-soft {
+    background-color: var(--color-accent-soft);
+  }
+  .bg-accent-softer {
+    background-color: var(--color-accent-softer);
+  }
+  .border-accent {
+    border-color: var(--color-accent);
+  }
+
+  .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+  }
+
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    border: 1px solid var(--color-hairline);
+    border-radius: 4px;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scroll-fade-mask {
+    mask-image: linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
+  }
+}
+
+/* Unovis scoped tweaks */
+.unovis-xy-container {
+  background: transparent !important;
+}

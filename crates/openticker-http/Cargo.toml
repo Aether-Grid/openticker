@@ -8,10 +8,14 @@ build = "build.rs"
 [lints]
 workspace = true
 
+[features]
+indicators = ["openticker-config/indicators", "openticker-runtime/indicators"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
+include_dir = "0.7"
 openticker-config = { path = "../openticker-config" }
 openticker-connectors = { path = "../openticker-connectors" }
 openticker-core = { path = "../openticker-core" }
