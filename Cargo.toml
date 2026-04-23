@@ -2,6 +2,8 @@
 members = [
     "crates/openticker-core",
     "crates/openticker-config",
+    "crates/openticker-registry",
+    "crates/openticker-indicators",
     "crates/openticker-instance",
     "crates/openticker-signals",
     "crates/openticker-strategy",
