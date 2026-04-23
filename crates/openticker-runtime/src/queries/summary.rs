@@ -41,48 +41,48 @@ impl Runtime {
             .iter()
             .filter(|status| connector_resilience_window_active(status))
             .count();
-        let summaries = self.list_instances();
-        let running_instances = summaries
-            .iter()
-            .filter(|summary| matches!(summary.state, LaneRuntimeState::Running))
-            .count();
-        let paused_instances = summaries
-            .iter()
-            .filter(|summary| matches!(summary.state, LaneRuntimeState::Paused))
-            .count();
-        let stopped_instances = summaries
-            .iter()
-            .filter(|summary| matches!(summary.state, LaneRuntimeState::Stopped))
-            .count();
-        let reconciling_instances = summaries
-            .iter()
-            .filter(|summary| matches!(summary.state, LaneRuntimeState::Reconciling))
-            .count();
-        let reconciliation_blocked_instances = summaries
-            .iter()
-            .filter(|summary| summary.reconciliation_blocked)
-            .count();
-        let warmup_ready_instances = summaries
-            .iter()
-            .filter(|summary| summary.warmup_ready_symbols == summary.symbols.len())
-            .count();
-        let warmup_pending_instances = summaries
-            .iter()
-            .filter(|summary| summary.warmup_ready_symbols < summary.symbols.len())
-            .count();
-        let warmup_failed_instances = self
-            .catalog
-            .lanes_by_bot
-            .keys()
-            .filter(|bot_id| {
-                self.repo()
-                    .lanes_for_bot(bot_id)
-                    .is_ok_and(|lanes| lanes.iter().any(|lane| lane.warmup.last_error.is_some()))
-            })
-            .count();
         let live_mode_active = connector_statuses
             .iter()
             .any(|status| status.live_mode_active);
+        let summaries = self.list_instances();
+        let mut running_instances = 0usize;
+        let mut paused_instances = 0usize;
+        let mut stopped_instances = 0usize;
+        let mut reconciling_instances = 0usize;
+        let mut reconciliation_blocked_instances = 0usize;
+        let mut warmup_ready_instances = 0usize;
+        let mut warmup_pending_instances = 0usize;
+        for summary in &summaries {
+            match summary.state {
+                LaneRuntimeState::Running => running_instances += 1,
+                LaneRuntimeState::Paused => paused_instances += 1,
+                LaneRuntimeState::Stopped => stopped_instances += 1,
+                LaneRuntimeState::Reconciling => reconciling_instances += 1,
+            }
+            if summary.reconciliation_blocked {
+                reconciliation_blocked_instances += 1;
+            }
+            if summary.warmup_ready_symbols == summary.symbols.len() {
+                warmup_ready_instances += 1;
+            } else {
+                warmup_pending_instances += 1;
+            }
+        }
+
+        let mut any_lane_unready = false;
+        let mut warmup_failed_bots = std::collections::HashSet::<&str>::new();
+        for instance in self.state.lanes.values() {
+            if instance.warmup.last_error.is_some() {
+                warmup_failed_bots.insert(instance.config.id.as_str());
+            }
+            if matches!(instance.state, LaneRuntimeState::Reconciling)
+                || instance.reconciliation_blocked
+                || instance.recovery_state != crate::LaneRecoveryState::Healthy
+            {
+                any_lane_unready = true;
+            }
+        }
+        let connectors_ready = self.connector_gateway().connectors_ready().unwrap_or(false);
 
         ServiceStatus {
             total_instances,
@@ -93,9 +93,9 @@ impl Runtime {
             reconciliation_blocked_instances,
             warmup_ready_instances,
             warmup_pending_instances,
-            warmup_failed_instances,
+            warmup_failed_instances: warmup_failed_bots.len(),
             kill_switch_active: self.state.kill_switch_active,
-            ready: self.is_ready(),
+            ready: !any_lane_unready && connectors_ready,
             live_mode_active,
             mode_banner: mode_banner_text(live_mode_active).to_owned(),
             connector_resilience_windows_active,
@@ -182,6 +182,28 @@ mod tests {
 
         let status = runtime.status();
         assert!(status.observability.risk_rejects_total > 0);
+    }
+
+    #[test]
+    fn status_counts_states_in_single_pass() {
+        let mut config = fixture_bundle();
+        let base = config.instances[0].clone();
+        for idx in 1..4 {
+            let mut twin = base.clone();
+            twin.id = format!("aapl-{idx}");
+            config.instances.push(twin);
+        }
+
+        let mut runtime = Runtime::from_config(&config);
+        runtime.start_instance("aapl").expect("start aapl");
+        runtime.start_instance("aapl-1").expect("start aapl-1");
+        runtime.pause_instance("aapl-1").expect("pause aapl-1");
+
+        let status = runtime.status();
+        assert_eq!(status.total_instances, 4);
+        assert_eq!(status.running_instances, 1);
+        assert_eq!(status.paused_instances, 1);
+        assert_eq!(status.stopped_instances, 2);
     }
 
     #[test]

@@ -1,9 +1,34 @@
+use super::gateway::{
+    GatewayFetchFailure, PendingProviderEvent, append_pending_provider_events,
+    gateway_fetch_latest_bar_with_events,
+};
 use super::recovery::LanePollingAdvance;
 use crate::{
     LaneRuntimeState, OhlcvBar, ProcessBarOutcome, Runtime, ServiceError, SignalPhase, StreamKey,
     instance_matches_stream_key,
 };
+use openticker_gateway::Gateway;
 use std::collections::BTreeMap;
+
+#[derive(Debug, Clone)]
+pub(crate) enum StreamPollPlan {
+    BareFetch {
+        stream_id: String,
+        account_id: String,
+        account_kind: String,
+        symbol: String,
+        timeframe: crate::Timeframe,
+    },
+    LaneFanOut {
+        instance_ids: Vec<String>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct BareStreamFetchExecution {
+    pub(crate) bar: OhlcvBar,
+    pub(crate) provider_events: Vec<PendingProviderEvent>,
+}
 
 impl Runtime {
     /// Dispatches a fetched bar to matching running instances.
@@ -77,10 +102,45 @@ impl Runtime {
             .map(Some)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn advance_stream_polling_once(
         &mut self,
         key: &StreamKey,
     ) -> Result<LanePollingAdvance, ServiceError> {
+        let plan = self.plan_stream_polling(key)?;
+        match plan {
+            StreamPollPlan::BareFetch {
+                stream_id,
+                account_id,
+                account_kind,
+                symbol,
+                timeframe,
+            } => {
+                let gateway = self.connector_gateway_snapshot();
+                let execution = match Runtime::execute_bare_stream_fetch(
+                    &gateway,
+                    &stream_id,
+                    &account_id,
+                    &account_kind,
+                    &symbol,
+                    timeframe,
+                ) {
+                    Ok(execution) => execution,
+                    Err(failure) => {
+                        append_pending_provider_events(self, &failure.provider_events)?;
+                        return Err(failure.error);
+                    }
+                };
+                self.apply_bare_fetched_bar(key, execution.bar, &execution.provider_events)
+            }
+            StreamPollPlan::LaneFanOut { instance_ids } => self.apply_lane_fanout(&instance_ids),
+        }
+    }
+
+    pub(crate) fn plan_stream_polling(
+        &self,
+        key: &StreamKey,
+    ) -> Result<StreamPollPlan, ServiceError> {
         let matching_instance_ids = self
             .state
             .lanes
@@ -104,25 +164,65 @@ impl Runtime {
                     key.account_id, key.symbol, key.timeframe, key.account_id
                 ))
             })?;
-            let stream_id = format!("stream:{}/{}/{}", key.account_id, key.symbol, key.timeframe);
-            let latest_bar = self.connector_gateway().fetch_latest_bar(
-                &stream_id,
-                &key.account_id,
-                account.kind.as_str(),
-                &key.symbol,
-                key.timeframe,
-            )?;
-            return Ok(LanePollingAdvance {
-                recorded_bars: vec![latest_bar],
-                outcomes: Vec::new(),
+            return Ok(StreamPollPlan::BareFetch {
+                stream_id: format!("stream:{}/{}/{}", key.account_id, key.symbol, key.timeframe),
+                account_id: key.account_id.clone(),
+                account_kind: account.kind.clone(),
+                symbol: key.symbol.clone(),
+                timeframe: key.timeframe,
             });
         }
 
+        Ok(StreamPollPlan::LaneFanOut {
+            instance_ids: matching_instance_ids,
+        })
+    }
+
+    pub(crate) fn execute_bare_stream_fetch(
+        gateway: &Gateway,
+        stream_id: &str,
+        account_id: &str,
+        account_kind: &str,
+        symbol: &str,
+        timeframe: crate::Timeframe,
+    ) -> Result<BareStreamFetchExecution, GatewayFetchFailure> {
+        let (bar, provider_events) = gateway_fetch_latest_bar_with_events(
+            gateway,
+            stream_id,
+            account_id,
+            account_kind,
+            symbol,
+            timeframe,
+        )?;
+        Ok(BareStreamFetchExecution {
+            bar,
+            provider_events,
+        })
+    }
+
+    pub(crate) fn apply_bare_fetched_bar(
+        &mut self,
+        _key: &StreamKey,
+        bar: OhlcvBar,
+        provider_events: &[PendingProviderEvent],
+    ) -> Result<LanePollingAdvance, ServiceError> {
+        append_pending_provider_events(self, provider_events)?;
+        Ok(LanePollingAdvance {
+            recorded_bars: vec![bar],
+            outcomes: Vec::new(),
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn apply_lane_fanout(
+        &mut self,
+        instance_ids: &[String],
+    ) -> Result<LanePollingAdvance, ServiceError> {
         let mut bars_by_timestamp = BTreeMap::new();
         let mut outcomes = Vec::new();
-        for instance_id in matching_instance_ids {
+        for instance_id in instance_ids {
             let advance = self.advance_lane_polling_once(
-                &instance_id,
+                instance_id.as_str(),
                 super::recovery::RECOVERY_PAGE_LIMIT,
                 super::recovery::MAX_RECOVERY_PAGES_PER_CYCLE,
             )?;

@@ -123,43 +123,48 @@ impl RuntimeRepoRead<'_> {
     }
 
     pub(crate) fn portfolio_snapshot_parts(&self) -> PortfolioSnapshotParts {
-        let accounts = self
-            .catalog
-            .accounts
-            .values()
-            .filter_map(|account| {
-                let ledger = self.account_ledger_handle(&account.id).ok()?;
-                let ledger = ledger.lock().ok()?;
-                Some(ledger.account_snapshot(&account.id))
-            })
-            .collect::<Vec<_>>();
+        let summaries = self.list_instances();
+        let mut bots_by_account =
+            std::collections::HashMap::<&str, Vec<&crate::InstanceSummary>>::new();
+        for summary in &summaries {
+            bots_by_account
+                .entry(summary.account.as_str())
+                .or_default()
+                .push(summary);
+        }
 
-        let bots = self
-            .list_instances()
-            .into_iter()
-            .filter_map(|summary| {
-                let ledger = self.account_ledger_handle(&summary.account).ok()?;
-                let ledger = ledger.lock().ok()?;
-                let primary_lane = self.lanes_for_bot(&summary.id).ok()?.into_iter().next()?;
-                Some(ledger.bot_snapshot(
-                    &summary.account,
-                    &summary.id,
-                    primary_lane.config.budget.pct,
-                ))
-            })
-            .collect::<Vec<_>>();
+        let mut accounts = Vec::new();
+        let mut bots = Vec::new();
+        let mut lanes = Vec::new();
 
-        let lanes = self
-            .catalog
-            .accounts
-            .values()
-            .filter_map(|account| {
-                let ledger = self.account_ledger_handle(&account.id).ok()?;
-                let ledger = ledger.lock().ok()?;
-                Some(ledger.lane_snapshots())
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+        for account in self.catalog.accounts.values() {
+            let Ok(ledger_handle) = self.account_ledger_handle(&account.id) else {
+                continue;
+            };
+            let Ok(ledger) = ledger_handle.lock() else {
+                continue;
+            };
+
+            accounts.push(ledger.account_snapshot(&account.id));
+
+            if let Some(account_bots) = bots_by_account.get(account.id.as_str()) {
+                for summary in account_bots {
+                    let Ok(lanes_for_bot) = self.lanes_for_bot(&summary.id) else {
+                        continue;
+                    };
+                    let Some(primary_lane) = lanes_for_bot.into_iter().next() else {
+                        continue;
+                    };
+                    bots.push(ledger.bot_snapshot(
+                        &summary.account,
+                        &summary.id,
+                        primary_lane.config.budget.pct,
+                    ));
+                }
+            }
+
+            lanes.extend(ledger.lane_snapshots());
+        }
 
         PortfolioSnapshotParts {
             accounts,
@@ -361,5 +366,23 @@ impl Runtime {
             self.refresh_account_ledger_from_connector(account_id.as_str())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Runtime;
+    use crate::test_support::fixture_bundle;
+
+    #[test]
+    fn ledger_snapshot_contains_all_accounts_and_lanes() {
+        let bundle = fixture_bundle();
+        let runtime = Runtime::from_config(&bundle);
+        let snapshot = runtime.ledger_snapshot();
+        assert_eq!(snapshot.accounts.len(), bundle.accounts.len());
+        assert!(
+            !snapshot.bots.is_empty(),
+            "fixture bundle should produce bot snapshots"
+        );
     }
 }

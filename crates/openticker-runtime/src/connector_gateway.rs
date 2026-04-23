@@ -19,9 +19,13 @@ impl<'a> ConnectorGatewayRead<'a> {
 impl Runtime {
     pub(crate) fn connector_gateway(&self) -> ConnectorGatewayRead<'_> {
         ConnectorGatewayRead {
-            gateway: Gateway::new(self.connectors.clone()),
+            gateway: self.connector_gateway_snapshot(),
             repo: self.repo(),
         }
+    }
+
+    pub(crate) fn connector_gateway_snapshot(&self) -> Gateway {
+        Gateway::new(self.connectors.clone())
     }
 }
 
