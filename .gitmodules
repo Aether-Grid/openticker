@@ -1,0 +1,3 @@
+[submodule "crates/openticker-indicators"]
+	path = crates/openticker-indicators
+	url = git@github.com:Aether-Grid/openticker-indicators.git
