@@ -1596,7 +1596,7 @@ pub fn apply_state_only_confirmed_bar(instance: &mut LaneRuntime, bar: &OhlcvBar
     }
 
     for indicator in &mut instance.indicators {
-        let _ = indicator.engine.update_signal(bar, SignalPhase::Confirmed);
+        let _ = indicator.engine.evaluate(bar, SignalPhase::Confirmed);
     }
 
     instance.last_dispatched_bar_timestamp = Some(bar.timestamp);

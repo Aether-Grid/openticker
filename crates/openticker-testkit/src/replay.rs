@@ -1,5 +1,4 @@
 use openticker_core::{OhlcvBar, SignalPhase};
-use openticker_signals::IndicatorEngine;
 use openticker_signals::sma_crossover::{
     SmaCrossoverError, SmaCrossoverIndicator, SmaCrossoverParams, SmaCrossoverSnapshot,
 };

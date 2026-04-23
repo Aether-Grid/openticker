@@ -935,6 +935,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1192,7 +1211,7 @@ dependencies = [
  "anyhow",
  "dotenvy",
  "openticker-core",
- "openticker-signals",
+ "openticker-registry",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1282,6 +1301,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "include_dir",
  "openticker-config",
  "openticker-connectors",
  "openticker-core",
@@ -1298,12 +1318,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "openticker-indicators"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "openticker-core",
+ "openticker-signals",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "openticker-instance"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "openticker-config",
  "openticker-core",
+ "openticker-registry",
  "openticker-signals",
  "openticker-strategy",
  "thiserror 2.0.18",
@@ -1345,6 +1380,15 @@ dependencies = [
  "openticker-ledger",
  "openticker-storage",
  "serde",
+]
+
+[[package]]
+name = "openticker-registry"
+version = "0.1.0"
+dependencies = [
+ "openticker-indicators",
+ "openticker-signals",
+ "toml",
 ]
 
 [[package]]
@@ -1391,6 +1435,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "toml",
  "tracing",
 ]
 
@@ -1780,7 +1825,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1798,9 +1843,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.38"
+version = "0.23.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
+checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "once_cell",
  "ring",
@@ -1822,9 +1867,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.12"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2761,15 +2806,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

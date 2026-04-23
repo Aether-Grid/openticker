@@ -3,10 +3,8 @@ use openticker_core::{
     IndicatorMetadataCapabilities, IndicatorRole, IndicatorSignal, IndicatorSignalMetadataFilters,
     IndicatorSignalPolicy, OhlcvBar, SignalMetadata, SignalPhase,
 };
-use openticker_signals::{
-    IndicatorEngine, SignalSnapshot, log_indicator_evaluation, manifest::indicator_manifest,
-    rsi_threshold::RsiThresholdIndicator, sma_crossover::SmaCrossoverIndicator,
-};
+use openticker_registry::{build_engine, indicator_manifest};
+use openticker_signals::{IndicatorEngine, log_indicator_evaluation};
 use openticker_strategy::{ConsensusLongOnlyStrategy, SingleIndicatorLongOnlyStrategy};
 use thiserror::Error;
 
@@ -36,7 +34,7 @@ pub struct ConfiguredIndicatorRuntime {
     pub metadata_capabilities: IndicatorMetadataCapabilities,
     pub metadata_filters: IndicatorSignalMetadataFilters,
     pub weight: f64,
-    pub engine: RuntimeIndicatorEngine,
+    pub engine: Box<dyn IndicatorEngine>,
 }
 
 #[derive(Debug)]
@@ -45,69 +43,21 @@ pub enum RuntimeStrategyEngine {
     Consensus(ConsensusLongOnlyStrategy),
 }
 
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum RuntimeIndicatorEngine {
-    SmaCrossover(SmaCrossoverIndicator),
-    RsiThreshold(RsiThresholdIndicator),
-}
-
-#[derive(Debug, Clone)]
-pub struct IndicatorEvaluationEnvelope {
-    pub signal: IndicatorSignal,
-    pub metadata: SignalMetadata,
-}
-
 fn invalid_configuration(message: impl Into<String>) -> InstanceError {
     InstanceError::InvalidConfiguration(message.into())
 }
 
-fn evaluation_from_snapshot<S: SignalSnapshot>(snapshot: &S) -> IndicatorEvaluationEnvelope {
-    IndicatorEvaluationEnvelope {
-        signal: snapshot.signal(),
-        metadata: snapshot.metadata(),
-    }
-}
-
-impl RuntimeIndicatorEngine {
-    #[must_use]
-    pub fn type_id(&self) -> &'static str {
-        match self {
-            Self::SmaCrossover(_) => "sma_crossover",
-            Self::RsiThreshold(_) => "rsi_threshold",
+fn evaluate_indicator_engine(
+    engine: &mut dyn IndicatorEngine,
+    bar: &OhlcvBar,
+    phase: SignalPhase,
+) -> openticker_signals::IndicatorEvaluation {
+    match phase {
+        SignalPhase::Preview => {
+            let mut preview_engine = engine.clone_engine();
+            preview_engine.evaluate(bar, phase)
         }
-    }
-
-    #[must_use]
-    pub fn update_signal(&mut self, bar: &OhlcvBar, phase: SignalPhase) -> IndicatorSignal {
-        self.update_evaluation(bar, phase).signal
-    }
-
-    #[must_use]
-    pub fn update_evaluation(
-        &mut self,
-        bar: &OhlcvBar,
-        phase: SignalPhase,
-    ) -> IndicatorEvaluationEnvelope {
-        match self {
-            Self::SmaCrossover(indicator) => {
-                evaluation_from_snapshot(&indicator.update(bar, phase))
-            }
-            Self::RsiThreshold(indicator) => {
-                evaluation_from_snapshot(&indicator.update(bar, phase))
-            }
-        }
-    }
-
-    #[must_use]
-    pub fn evaluate(&mut self, bar: &OhlcvBar, phase: SignalPhase) -> IndicatorEvaluationEnvelope {
-        match phase {
-            SignalPhase::Preview => {
-                let mut preview_engine = self.clone();
-                preview_engine.update_evaluation(bar, phase)
-            }
-            SignalPhase::Confirmed => self.update_evaluation(bar, phase),
-        }
+        SignalPhase::Confirmed => engine.evaluate(bar, phase),
     }
 }
 
@@ -217,42 +167,13 @@ pub fn build_runtime_strategy(
 fn build_runtime_indicator_engine(
     instance_id: &str,
     indicator: &IndicatorInstanceConfig,
-) -> Result<RuntimeIndicatorEngine, InstanceError> {
-    let engine = match indicator.indicator_type.as_str() {
-        "sma_crossover" => {
-            let fast_length = indicator_param_usize(indicator, "fast_length").unwrap_or(10);
-            let slow_length = indicator_param_usize(indicator, "slow_length").unwrap_or(30);
-            RuntimeIndicatorEngine::SmaCrossover(
-                SmaCrossoverIndicator::try_new(fast_length, slow_length).map_err(|error| {
-                    invalid_configuration(format!(
-                        "instance `{instance_id}` indicator `{}` has invalid params: {error}",
-                        indicator.id
-                    ))
-                })?,
-            )
-        }
-        "rsi_threshold" => {
-            let period = indicator_param_usize(indicator, "period").unwrap_or(14);
-            let oversold = indicator_param_f64(indicator, "oversold").unwrap_or(30.0);
-            let overbought = indicator_param_f64(indicator, "overbought").unwrap_or(70.0);
-            RuntimeIndicatorEngine::RsiThreshold(
-                RsiThresholdIndicator::try_new(period, oversold, overbought).map_err(|error| {
-                    invalid_configuration(format!(
-                        "instance `{instance_id}` indicator `{}` has invalid params: {error}",
-                        indicator.id
-                    ))
-                })?,
-            )
-        }
-        other => {
-            return Err(invalid_configuration(format!(
-                "instance `{instance_id}` indicator `{}` uses unsupported runtime type `{other}`",
-                indicator.id
-            )));
-        }
-    };
-
-    Ok(engine)
+) -> Result<Box<dyn IndicatorEngine>, InstanceError> {
+    build_engine(&indicator.indicator_type, &indicator.params).map_err(|error| {
+        invalid_configuration(format!(
+            "instance `{instance_id}` indicator `{}`: {error}",
+            indicator.id
+        ))
+    })
 }
 
 #[must_use]
@@ -264,7 +185,7 @@ pub fn evaluate_indicator_signals(
     indicators
         .iter_mut()
         .map(|indicator| {
-            let evaluation = indicator.engine.evaluate(bar, phase);
+            let evaluation = evaluate_indicator_engine(indicator.engine.as_mut(), bar, phase);
             log_indicator_evaluation(
                 indicator.id.as_str(),
                 indicator.engine.type_id(),
@@ -305,25 +226,6 @@ pub fn default_signal_policy(signal_mode: SignalMode) -> IndicatorSignalPolicy {
     }
 }
 
-fn indicator_param_f64(indicator: &IndicatorInstanceConfig, key: &str) -> Option<f64> {
-    indicator.params.get(key).and_then(|value| {
-        value.as_float().or_else(|| {
-            value
-                .as_integer()
-                .and_then(|integer| integer.to_string().parse::<f64>().ok())
-        })
-    })
-}
-
-#[allow(clippy::redundant_closure_for_method_calls)]
-fn indicator_param_usize(indicator: &IndicatorInstanceConfig, key: &str) -> Option<usize> {
-    indicator
-        .params
-        .get(key)
-        .and_then(|value| value.as_integer())
-        .and_then(|integer| usize::try_from(integer).ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,7 +234,7 @@ mod tests {
         BudgetConfig, ExecutionConstraintsConfig, InstanceRiskConfig, RiskOverrides,
     };
     use openticker_core::{MarketType, Timeframe};
-    use openticker_signals::manifest::indicator_manifests;
+    use openticker_registry::indicator_manifests;
     use toml::Table;
 
     fn test_instance(indicator_type: &str) -> InstanceConfig {

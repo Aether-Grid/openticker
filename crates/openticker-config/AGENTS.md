@@ -22,7 +22,7 @@ This directory contains the config schema and validation layer. Changes here aff
 - Crate tests live in `src/tests.rs`.
 - `load_from_dir` is the main entry point.
 - Bot config files are loaded from `global.service.bot_dir`, which defaults to `bots/`.
-- Validation depends on local connector capability tables and `openticker_signals::indicator_manifest`.
+- Validation depends on local connector capability tables and `openticker_registry::indicator_manifest`.
 - `effective_config` is the safe inspection view used by other crates.
 
 ## Invariants
@@ -50,14 +50,14 @@ This directory contains the config schema and validation layer. Changes here aff
 
 ### Add a new indicator type or role rule
 
-1. Update `openticker-signals` first if the manifest needs new metadata.
+1. Update `openticker-signals` first for built-ins or `openticker-indicators` for private extensions if the manifest needs new metadata.
 2. Confirm `validate_indicators` enforces the new capability or role rules correctly.
 3. Update config examples if deployable bots should use the new type.
 
 ## Watchouts
 
 - Connector knowledge is duplicated here and in the connector crate.
-- Runtime support and config support are separate concerns; a type that validates here still needs runtime construction support elsewhere.
+- Runtime support and config support now share the build-specific registry, but feature-forwarding still matters for private extension builds.
 
 ## Common Follow-Ups
 

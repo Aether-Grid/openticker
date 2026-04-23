@@ -5,10 +5,10 @@ Last reviewed: 2026-04-18
 ## Overview
 
 This crate owns config-driven indicator and strategy assembly plus per-bar
-indicator evaluation semantics.
+indicator evaluation semantics over boxed indicator engines.
 
 `openticker-instance` should remain the pure runtime-wiring layer between
-`openticker-config`, `openticker-signals`, and `openticker-strategy`.
+`openticker-config`, `openticker-registry`, and `openticker-strategy`.
 
 ## Package And Commands
 
@@ -18,9 +18,9 @@ indicator evaluation semantics.
 
 ## Current Working Shape
 
-- `RuntimeIndicatorEngine` is a concrete enum over supported indicators.
-- `build_runtime_indicator_engine(...)` uses string dispatch from
-  `IndicatorInstanceConfig.indicator_type`.
+- `ConfiguredIndicatorRuntime.engine` is a boxed `IndicatorEngine` trait object.
+- `build_runtime_indicator_engine(...)` delegates string dispatch from
+  `IndicatorInstanceConfig.indicator_type` to `openticker-registry`.
 - `build_runtime_indicators(...)` applies role, signal-policy, metadata, and
   weight defaults.
 - `build_runtime_strategy(...)` currently supports
@@ -41,12 +41,12 @@ indicator evaluation semantics.
 
 ### Add a new runtime indicator type
 
-1. Add indicator implementation and manifest metadata in
-   `crates/openticker-signals`.
-2. Add enum variant and dispatch wiring in `RuntimeIndicatorEngine` and
-   `build_runtime_indicator_engine(...)`.
-3. Ensure `type_id(...)` and evaluation dispatch include the new variant.
-4. Add focused tests for parameter parsing and preview/confirmed behavior.
+1. Add indicator implementation and descriptor metadata in
+   `crates/openticker-signals` for built-ins or `crates/openticker-indicators`
+   for private extensions.
+2. Ensure the owning crate exports the descriptor and the build-specific
+   registry can see it.
+3. Add focused tests for parameter parsing and preview/confirmed behavior.
 
 ### Add a new runtime strategy type
 
@@ -56,8 +56,8 @@ indicator evaluation semantics.
 
 ## Watchouts
 
-- Indicator type support is still manually mirrored in this crate and can drift
-  from signals manifest coverage.
+- Indicator type support now comes from the build-specific registry. Keep this
+  crate free of concrete indicator imports.
 - Preview evaluation clones full indicator engines and may become expensive as
   indicator state grows.
 

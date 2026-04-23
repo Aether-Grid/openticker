@@ -6,7 +6,7 @@ use crate::model::{
 use openticker_core::{
     ExecutionMode, IndicatorRole, IndicatorSignalPolicy, IndicatorStabilityClass, MarketType,
 };
-use openticker_signals::indicator_manifest;
+use openticker_registry::indicator_manifest;
 use std::collections::{HashMap, HashSet};
 
 const BINANCE_ALLOWED_CASH_BALANCE_ASSETS: [&str; 5] = ["USD", "USDT", "USDC", "BUSD", "FDUSD"];

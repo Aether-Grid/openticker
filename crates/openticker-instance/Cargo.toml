@@ -7,9 +7,13 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+indicators = ["openticker-registry/indicators"]
+
 [dependencies]
 openticker-config = { path = "../openticker-config" }
 openticker-core = { path = "../openticker-core" }
+openticker-registry = { path = "../openticker-registry" }
 openticker-signals = { path = "../openticker-signals" }
 openticker-strategy = { path = "../openticker-strategy" }
 thiserror.workspace = true

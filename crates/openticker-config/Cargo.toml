@@ -7,11 +7,14 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+indicators = ["openticker-registry/indicators"]
+
 [dependencies]
 anyhow.workspace = true
 dotenvy.workspace = true
 openticker-core = { path = "../openticker-core" }
-openticker-signals = { path = "../openticker-signals" }
+openticker-registry = { path = "../openticker-registry" }
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true

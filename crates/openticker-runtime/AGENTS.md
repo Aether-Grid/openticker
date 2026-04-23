@@ -106,11 +106,10 @@ budgeting, and journal-backed read models.
 
 ### Add a new indicator type
 
-1. Add the indicator implementation in `openticker-signals`.
-2. Add manifest metadata there.
+1. Add the indicator implementation in `openticker-signals` for built-ins or `openticker-indicators` for private extensions.
+2. Register its descriptor in the owning crate.
 3. Update config validation if new parameters or rules are needed.
-4. Wire the type into `build_runtime_indicator_engine` here.
-5. Add runtime tests if the indicator changes processing behavior materially.
+4. Add runtime tests if the indicator changes processing behavior materially.
 
 ### Add a new strategy type
 
@@ -146,8 +145,8 @@ budgeting, and journal-backed read models.
   `src/repo/accounting.rs`.
 - `src/processing/` is split structurally, but the pipeline is still tightly
   coupled across planner, executor, journal, and state updates.
-- Runtime indicator support is currently duplicated manually here even though
-  manifests exist in the signals crate.
+- Runtime indicator support now flows through `openticker-instance` and the
+  build-specific registry rather than local runtime wiring.
 - `evaluate_process_bar` still uses placeholder stale-data, spread, and
   slippage inputs. Do not assume those signals are already fully wired.
 

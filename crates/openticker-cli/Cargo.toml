@@ -7,6 +7,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+indicators = ["openticker-config/indicators", "openticker-http/indicators"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
