@@ -1,6 +1,7 @@
 /target/
 /var
 /.idea
+/.agents
 /docs
 .DS_Store
 .env
