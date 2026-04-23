@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        OPENTICKER_FEATURES: ${OPENTICKER_FEATURES:-}
     command: ["service", "run", "--config-dir", "/app/config", "--bind", "0.0.0.0:8080"]
     env_file:
       - path: ./.env

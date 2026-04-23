@@ -10,9 +10,14 @@ RUN apt-get update \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# Space-separated list of Cargo features to enable on the `openticker-cli`
+# build (e.g. `indicators` to pull in the private indicator pack). Leave empty
+# for the pure OSS build.
+ARG OPENTICKER_FEATURES=""
+
 COPY . .
 RUN cargo test --workspace
-RUN cargo build --release -p openticker-cli
+RUN cargo build --release -p openticker-cli ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"}
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app

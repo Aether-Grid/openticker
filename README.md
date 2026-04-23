@@ -85,6 +85,8 @@ The open-source build currently ships two generic built-in indicators:
 
 These are enough to exercise the full config, runtime, strategy, HTTP, and test surfaces without carrying private indicator names forward.
 
+Additional indicator descriptors live in the `openticker-indicators` crate and are compiled in only when the `indicators` Cargo feature is enabled (see [Build Features](#build-features)). Bot configs that reference those indicator types will fail validation with `unsupported indicator type` on a build without the feature.
+
 ## Workspace Crates
 
 - `openticker-core`: shared domain types
@@ -132,6 +134,29 @@ cargo run -p openticker-cli -- service run --config-dir config
 ```bash
 cargo run -p openticker-cli -- dashboard
 ```
+
+## Build Features
+
+OpenTicker uses a Cargo feature to gate the private indicator pack shipped in `openticker-indicators`. Features are resolved at compile time — there is no runtime toggle.
+
+- **OSS build (default):** only `sma_crossover` and `rsi_threshold` are registered.
+- **With `indicators`:** every descriptor exposed by `openticker-indicators::indicator_descriptors()` is registered alongside the OSS ones.
+
+Enable it however you build:
+
+```bash
+# Local
+cargo build --release -p openticker-cli --features indicators
+cargo run -p openticker-cli --features indicators -- validate-config --config-dir config
+
+# Docker (direct)
+docker build --build-arg OPENTICKER_FEATURES=indicators -t openticker .
+
+# docker compose — via shell env or .env at the repo root
+OPENTICKER_FEATURES=indicators docker compose build
+```
+
+Leave `OPENTICKER_FEATURES` unset (or empty) for the pure OSS build.
 
 ## Config Layout
 
