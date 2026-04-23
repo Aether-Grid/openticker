@@ -234,6 +234,7 @@ profile = "equities-default"
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn effective_config_never_exposes_secret_values() {
     let fixture_dir = create_fixture_dir("effective-config-redaction");
     let timestamp = SystemTime::now()

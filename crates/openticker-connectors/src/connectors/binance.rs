@@ -1204,6 +1204,7 @@ where
         })
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_binance_preview_stream_worker(
     account: ConnectorAccount,
     mut command_rx: mpsc::UnboundedReceiver<ConnectorPreviewStreamCommand>,
