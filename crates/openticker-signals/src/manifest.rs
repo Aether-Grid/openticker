@@ -1,6 +1,8 @@
+use crate::registry::builtin_indicator_descriptors;
 use openticker_core::{
     IndicatorMetadataCapabilities, IndicatorRole, IndicatorStabilityClass, MarketType, SignalPhase,
 };
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndicatorMarketSupport {
@@ -71,63 +73,26 @@ impl IndicatorManifest {
     }
 }
 
-const CAPABILITIES_FULL: IndicatorCapabilities = IndicatorCapabilities {
-    supports_intrabar: true,
-    supports_preview: true,
-    supports_confirmed: true,
-};
-
-const WARMUP_STANDARD: IndicatorWarmupRequirements = IndicatorWarmupRequirements {
-    minimum_confirmed_bars: 50,
-    recommended_backfill_bars: 200,
-};
-
-const METADATA_SIGNAL_FACTS: IndicatorMetadataCapabilities = IndicatorMetadataCapabilities {
-    supports_strength: false,
-    supports_reason_code: true,
-    supports_tags: false,
-    supports_facts: true,
-    supports_trade_levels: false,
-};
-
-const ROLES_PRIMARY_SIGNAL: &[IndicatorRole] = &[IndicatorRole::PrimarySignal];
-const ROLES_FILTER_OR_CONTEXT: &[IndicatorRole] = &[IndicatorRole::Filter, IndicatorRole::Context];
-
-const INDICATOR_MANIFESTS: [IndicatorManifest; 2] = [
-    IndicatorManifest {
-        type_id: "sma_crossover",
-        family: "trend",
-        role_default: IndicatorRole::PrimarySignal,
-        allowed_roles: ROLES_PRIMARY_SIGNAL,
-        stability_class: IndicatorStabilityClass::StableOnClose,
-        market_support: IndicatorMarketSupport::BOTH,
-        capabilities: CAPABILITIES_FULL,
-        warmup: WARMUP_STANDARD,
-        metadata: METADATA_SIGNAL_FACTS,
-    },
-    IndicatorManifest {
-        type_id: "rsi_threshold",
-        family: "momentum",
-        role_default: IndicatorRole::Filter,
-        allowed_roles: ROLES_FILTER_OR_CONTEXT,
-        stability_class: IndicatorStabilityClass::StableOnClose,
-        market_support: IndicatorMarketSupport::BOTH,
-        capabilities: CAPABILITIES_FULL,
-        warmup: WARMUP_STANDARD,
-        metadata: METADATA_SIGNAL_FACTS,
-    },
-];
+static INDICATOR_MANIFESTS: OnceLock<Vec<IndicatorManifest>> = OnceLock::new();
 
 #[must_use]
-pub const fn indicator_manifests() -> &'static [IndicatorManifest] {
-    &INDICATOR_MANIFESTS
+pub fn indicator_manifests() -> &'static [IndicatorManifest] {
+    INDICATOR_MANIFESTS
+        .get_or_init(|| {
+            builtin_indicator_descriptors()
+                .iter()
+                .map(|descriptor| *descriptor.manifest)
+                .collect::<Vec<_>>()
+        })
+        .as_slice()
 }
 
 #[must_use]
 pub fn indicator_manifest(type_id: &str) -> Option<&'static IndicatorManifest> {
-    INDICATOR_MANIFESTS
+    builtin_indicator_descriptors()
         .iter()
-        .find(|manifest| manifest.type_id == type_id)
+        .find(|descriptor| descriptor.manifest.type_id == type_id)
+        .map(|descriptor| descriptor.manifest)
 }
 
 #[cfg(test)]

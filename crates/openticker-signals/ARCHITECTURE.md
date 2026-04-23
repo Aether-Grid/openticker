@@ -13,6 +13,7 @@ It owns:
 - reusable time-series math helpers
 - indicator-specific parameter, snapshot, and engine-state types
 - lightweight indicator-evaluation logging helpers
+- built-in indicator descriptors consumed by the cross-crate registry
 
 This crate does not own runtime orchestration. It produces deterministic indicator behavior over normalized bars.
 
@@ -21,15 +22,17 @@ This crate does not own runtime orchestration. It produces deterministic indicat
 Top-level public contract and helpers:
 
 - `IndicatorEngine`
+- `IndicatorEvaluation`
 - `indicator_manifest(name)`
 - `indicator_manifests()`
+- `builtin_indicator_descriptors()`
 - `IndicatorManifest`
 - `IndicatorCapabilities`
 - `IndicatorMarketSupport`
 - `IndicatorWarmupRequirements`
 - `log_indicator_evaluation(...)`
 
-Concrete built-in indicators are exported from `src/lib.rs` through `src/signals/mod.rs` and live under `src/signals/`.
+Concrete built-in indicators are exported from `src/lib.rs` through `src/indicators/mod.rs` and live under `src/indicators/`.
 
 Representative examples:
 
@@ -52,14 +55,15 @@ Representative examples:
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | Public exports and the `IndicatorEngine` trait |
+| `src/lib.rs` | Public exports and the object-safe `IndicatorEngine` trait |
 | `src/common.rs` | Shared math and series helpers |
 | `src/manifest.rs` | Built-in indicator metadata and capabilities |
 | `src/observability.rs` | Actionable indicator-evaluation logging |
-| `src/signals/mod.rs` | Signal module index for built-ins |
-| `src/signals/*.rs` indicator modules | Params, snapshot, engine state, validation, tests per indicator |
+| `src/registry.rs` | Built-in indicator descriptor helpers |
+| `src/indicators/mod.rs` | Indicator module index for built-ins |
+| `src/indicators/*.rs` indicator modules | Params, snapshot, engine state, descriptors, validation, tests per indicator |
 
-The current crate shape keeps contract/manifest/helpers at the crate root and groups indicator modules under `src/signals/`.
+The current crate shape keeps contract/manifest/helpers at the crate root and groups built-in indicator modules under `src/indicators/`.
 
 ## Direct Dependency Wiring
 
@@ -75,8 +79,9 @@ This crate is intentionally pure and has no direct dependency on runtime, config
 
 Primary consumers:
 
-- `openticker-config` calls `indicator_manifest(...)` to validate configured indicators
-- `openticker-runtime` manually constructs concrete indicator engines and drives them through `IndicatorEngine`
+- `openticker-registry` aggregates built-in and optional extension descriptors for the current build
+- `openticker-config` calls the full registry to validate configured indicators
+- `openticker-instance` constructs boxed indicator engines through the full registry and drives them through `IndicatorEngine`
 - `openticker-testkit` reuses concrete indicators for deterministic replay helpers
 
 ## Outbound Wiring
@@ -89,15 +94,15 @@ Its only shared dependency is `openticker-core`.
 
 At runtime, the effective shape is:
 
-1. runtime chooses an indicator type by name
-2. runtime manually constructs the corresponding concrete engine
-3. runtime feeds each `OhlcvBar` plus `SignalPhase` into `IndicatorEngine::update`
-4. the concrete engine mutates internal state and returns a typed snapshot
-5. runtime extracts `IndicatorSignal` and snapshot metadata for downstream strategy logic and journaling
+1. the build-specific registry chooses an indicator type by name
+2. the registry constructs the corresponding concrete engine from descriptor metadata
+3. runtime feeds each `OhlcvBar` plus `SignalPhase` into `IndicatorEngine::evaluate`
+4. the concrete engine mutates internal state and derives a typed snapshot internally
+5. runtime receives `IndicatorEvaluation` for downstream strategy logic and journaling
 
 ## Current Implementation Realities
 
-- Manifest metadata is richer than runtime construction. `manifest.rs` and `openticker-runtime::build_runtime_indicator_engine` are still separate sources of truth.
+- Built-in manifest metadata is descriptor-backed, so built-in metadata and built-in construction share one source of truth.
 - Shared math is partially centralized in `common.rs`, but some indicator files still carry local helper implementations.
 - Several indicators are classified as filter or context components and currently do not emit actionable signals.
 - The contract stays pure, but engines are expected to be cloneable and deterministic because preview evaluation may run on cloned state.
@@ -105,11 +110,8 @@ At runtime, the effective shape is:
 
 ## Practical Wiring Notes
 
-- Adding an indicator here is not enough to make it deployable.
-- A deployable indicator also needs:
-  - manifest metadata in this crate
-  - config validation support in `openticker-config`
-  - runtime factory wiring in `openticker-runtime`
+- Adding a built-in indicator here is enough to make it visible to the build-specific registry, but private extension indicators live in `openticker-indicators` and are aggregated separately.
+- A deployable indicator still may need config validation updates in `openticker-config` if it introduces new rules or parameters.
 
 ## Diagram
 
@@ -121,14 +123,14 @@ flowchart TD
   Module[Concrete indicator module]
   Snapshot[Typed snapshot]
   Signal[IndicatorSignal]
-  Manifest[manifest.rs]
+  Registry[openticker-registry]
   Config[openticker-config]
-  Runtime[openticker-runtime]
+  Instance[openticker-instance]
 
   Bars --> Engine
   Phase --> Engine
   Engine --> Module --> Snapshot
   Snapshot --> Signal
-  Manifest --> Config
-  Module --> Runtime
+  Module --> Registry --> Config
+  Registry --> Instance
 ```

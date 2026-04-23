@@ -6,15 +6,16 @@ Indicator contracts, manifests, and built-in signal implementations for OpenTick
 
 ## Purpose
 
-`openticker-signals` is the workspace home for indicator behavior. It defines the shared update contract, ships the built-in OSS-safe indicators, classifies them through manifests, and emits observability logs for evaluation.
+`openticker-signals` is the workspace home for the object-safe indicator contract and the built-in OSS-safe default/example indicators. It ships the built-in descriptors and manifests for those indicators and emits observability logs for evaluation.
 
 ## Current Architecture
 
-- `src/lib.rs`: public re-exports for the indicator contract and manifests
+- `src/lib.rs`: public re-exports for the indicator contract, built-in manifests, and descriptor types
 - `src/common.rs`: shared math and series-building helpers such as EMA, SMA, Wilder RMA, ATR, RSI, Supertrend, crossover, and crossunder
-- `src/manifest.rs`: the static registry for supported built-in indicators
-- `src/signals/mod.rs`: indicator module declarations
-- `src/signals/*.rs`: one module per indicator implementation
+- `src/manifest.rs`: built-in manifest helpers derived from the built-in descriptor registry
+- `src/registry.rs`: built-in indicator descriptor helpers
+- `src/indicators/mod.rs`: built-in indicator module declarations
+- `src/indicators/*.rs`: one module per built-in indicator implementation
 
 ## Built-In Indicators
 
@@ -24,8 +25,8 @@ Indicator contracts, manifests, and built-in signal implementations for OpenTick
 ## Current State
 
 - Shared math helpers live in `common.rs`.
-- Runtime construction still happens outside this crate.
-- The manifest is authoritative for classification, but runtime instantiation is still manually mirrored in `openticker-instance`.
+- Runtime construction now happens through `openticker-registry`.
+- The built-in manifest is descriptor-backed, so built-in metadata and built-in construction stay in one place.
 - Coverage currently focuses on deterministic unit tests for the built-in indicators plus manifest contract tests.
 
 ## Verify
