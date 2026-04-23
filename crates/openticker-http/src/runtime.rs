@@ -29,7 +29,7 @@ pub async fn serve(bind_addr: &str, state: HttpState) -> Result<()> {
     let listener = TcpListener::bind(bind_addr).await?;
     info!(bind_addr, "starting HTTP API server");
     let polling_supervisor =
-        RuntimePollingSupervisor::start(Arc::clone(&state.runtime), Arc::clone(&state.data_plane));
+        RuntimePollingSupervisor::start(&state.runtime, Arc::clone(&state.data_plane));
 
     let serve_result = axum::serve(listener, build_router(state)).await;
     polling_supervisor.shutdown().await;

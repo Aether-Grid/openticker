@@ -381,32 +381,47 @@ pub(crate) async fn openapi_handler() -> Json<serde_json::Value> {
 pub(crate) async fn service_status_handler(
     State(state): State<HttpState>,
 ) -> Json<serde_json::Value> {
-    let runtime = state.runtime.read().await;
-    Json(json!(runtime.status()))
+    let status = {
+        let runtime = state.runtime.read().await;
+        runtime.status()
+    };
+    Json(json!(status))
 }
 
 pub(crate) async fn ledger_handler(State(state): State<HttpState>) -> Json<serde_json::Value> {
-    let runtime = state.runtime.read().await;
-    Json(json!(runtime.ledger_snapshot()))
+    let ledger = {
+        let runtime = state.runtime.read().await;
+        runtime.ledger_snapshot()
+    };
+    Json(json!(ledger))
 }
 
 pub(crate) async fn ledger_accounts_handler(
     State(state): State<HttpState>,
 ) -> Json<serde_json::Value> {
-    let runtime = state.runtime.read().await;
-    Json(json!(runtime.ledger_snapshot().accounts))
+    let accounts = {
+        let runtime = state.runtime.read().await;
+        runtime.ledger_snapshot().accounts
+    };
+    Json(json!(accounts))
 }
 
 pub(crate) async fn ledger_bots_handler(State(state): State<HttpState>) -> Json<serde_json::Value> {
-    let runtime = state.runtime.read().await;
-    Json(json!(runtime.ledger_snapshot().bots))
+    let bots = {
+        let runtime = state.runtime.read().await;
+        runtime.ledger_snapshot().bots
+    };
+    Json(json!(bots))
 }
 
 pub(crate) async fn ledger_lanes_handler(
     State(state): State<HttpState>,
 ) -> Json<serde_json::Value> {
-    let runtime = state.runtime.read().await;
-    Json(json!(runtime.ledger_snapshot().lanes))
+    let lanes = {
+        let runtime = state.runtime.read().await;
+        runtime.ledger_snapshot().lanes
+    };
+    Json(json!(lanes))
 }
 
 pub(crate) async fn list_data_streams_handler(
@@ -527,8 +542,11 @@ pub(crate) async fn connectors_matrix_handler() -> Json<serde_json::Value> {
 pub(crate) async fn connectors_status_handler(
     State(state): State<HttpState>,
 ) -> Json<serde_json::Value> {
-    let runtime = state.runtime.read().await;
-    Json(json!(runtime.connector_statuses()))
+    let statuses = {
+        let runtime = state.runtime.read().await;
+        runtime.connector_statuses()
+    };
+    Json(json!(statuses))
 }
 
 pub(crate) async fn config_reload_handler(State(state): State<HttpState>) -> impl IntoResponse {
@@ -1042,6 +1060,7 @@ pub(crate) async fn list_bots_handler(State(state): State<HttpState>) -> Json<se
             .collect::<HashMap<_, _>>();
         (summaries, lane_summaries_by_bot)
     };
+    // The runtime read guard is intentionally dropped before we snapshot dataplane state.
     let stream_statuses = stream_status_map(state.data_plane.snapshot_streams(unix_now_ms(), 1));
     let instances = summaries
         .into_iter()

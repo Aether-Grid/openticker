@@ -35,6 +35,25 @@ impl HttpState {
     }
 
     #[must_use]
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided runtime lock is contended while building the query handle.
+    pub fn new_from_parts(runtime: Arc<RwLock<Runtime>>, data_plane: Arc<DataPlane>) -> Self {
+        let query = runtime
+            .try_read()
+            .expect("HttpState::new_from_parts requires an uncontended runtime lock")
+            .query_handle();
+        Self {
+            runtime,
+            query: Arc::new(RwLock::new(query)),
+            config_bundle: Arc::new(RwLock::new(None)),
+            config_dir: None,
+            data_plane,
+        }
+    }
+
+    #[must_use]
     pub fn with_config(runtime: Runtime, config_dir: PathBuf, bundle: ConfigBundle) -> Self {
         let query = runtime.query_handle();
         let data_plane = Arc::new(DataPlane::new(runtime.effective_streams_for_dataplane()));
