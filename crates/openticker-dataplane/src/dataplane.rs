@@ -158,6 +158,10 @@ impl DataPlane {
     /// # Errors
     ///
     /// Returns [`DataPlaneError::UnknownStream`] when the stream key is not registered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal dataplane state mutex is poisoned.
     pub fn record_fetched_bar_from_source(
         &self,
         key: &StreamKey,
@@ -205,6 +209,10 @@ impl DataPlane {
     /// # Errors
     ///
     /// Returns [`DataPlaneError::UnknownStream`] when the stream key is not registered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal dataplane state mutex is poisoned.
     pub fn record_preview_connection_state(
         &self,
         key: &StreamKey,
@@ -226,6 +234,10 @@ impl DataPlane {
     /// # Errors
     ///
     /// Returns [`DataPlaneError::UnknownStream`] when the stream key is not registered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal dataplane state mutex is poisoned.
     pub fn record_preview_update(
         &self,
         key: &StreamKey,

@@ -262,6 +262,9 @@ impl ConnectorPreviewStreamSession {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the preview session command channel has already closed.
     pub fn replace_subscriptions(
         &self,
         subscriptions: Vec<ConnectorMarketStreamSubscription>,
@@ -273,12 +276,19 @@ impl ConnectorPreviewStreamSession {
             .map_err(|error| format!("preview stream session closed: {error}"))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the preview session command channel has already closed.
     pub fn shutdown(&self) -> Result<(), String> {
         self.command_tx
             .send(ConnectorPreviewStreamCommand::Shutdown)
             .map_err(|error| format!("preview stream session closed: {error}"))
     }
 
+    /// # Errors
+    ///
+    /// Returns `Err(TryRecvError::Empty)` when no event is queued and
+    /// `Err(TryRecvError::Disconnected)` when the session has ended.
     pub fn try_recv(&mut self) -> Result<ConnectorPreviewStreamEvent, TryRecvError> {
         self.event_rx.try_recv()
     }
