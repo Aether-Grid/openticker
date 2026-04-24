@@ -18,13 +18,15 @@ ARG OPENTICKER_FEATURES=""
 ARG GITHUB_TOKEN=""
 
 COPY . .
-RUN trap 'rm -f /root/.gitconfig' EXIT; \
-    if [ -n "$GITHUB_TOKEN" ]; then \
-        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
-        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
+RUN git submodule sync --recursive \
+    && if [ -n "$GITHUB_TOKEN" ]; then \
+        git \
+            -c url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf="https://github.com/" \
+            -c url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf="git@github.com:" \
+            submodule update --init --recursive; \
+    else \
+        git submodule update --init --recursive; \
     fi \
-    && git submodule sync --recursive \
-    && git submodule update --init --recursive \
     && cargo test --workspace ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"} \
     && cargo build --release -p openticker-cli ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"}
 
