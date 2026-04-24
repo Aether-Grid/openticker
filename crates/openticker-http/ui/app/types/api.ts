@@ -81,7 +81,12 @@ export interface StreamStatus {
   latest_bar?: OhlcvBar | null
   fetch_count?: number
   error_count?: number
+  transport_staleness_ms?: number | null
   staleness_ms?: number | null
+  confirmed_bar_close_ms?: number | null
+  confirmed_bar_staleness_ms?: number | null
+  confirmed_bar_stale_deadline_ms?: number | null
+  latest_preview_bar?: OhlcvBar | null
   preview_enabled?: boolean
   preview_connection_state?: string | null
   last_preview_update_ms?: number | null

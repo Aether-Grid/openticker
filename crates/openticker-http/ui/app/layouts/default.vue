@@ -114,7 +114,7 @@ const paletteOpen = ref(false)
       }"
       class="border-r border-[color:var(--color-hairline)] bg-white"
     >
-      <template #header="{ collapsed, collapse }">
+      <template #header="{ collapsed }">
         <NuxtLink
           to="/"
           class="flex items-center gap-2.5 min-w-0 select-none flex-1"

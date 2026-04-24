@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import type { StreamStatus } from '~/types/api'
-import type { Freshness } from '~/utils/format'
-import { fmtNumber, fmtRelative, freshnessLabel, streamFreshness } from '~/utils/format'
+import type { Freshness, PreviewHealth } from '~/utils/format'
+import {
+  closedBarFreshness,
+  fmtNumber,
+  fmtRelativeMs,
+  freshnessLabel,
+  previewHealth,
+  previewHealthLabel
+} from '~/utils/format'
 
 definePageMeta({ layout: 'default' })
 
@@ -36,7 +43,24 @@ const freshnessItems = [
 ]
 
 function streamState(s: StreamStatus): Freshness {
-  return streamFreshness(s.staleness_ms, s.last_error, s.polling_interval_ms, s.close_poll_grace_ms)
+  return closedBarFreshness(
+    s.confirmed_bar_staleness_ms,
+    s.last_error,
+    s.polling_interval_ms,
+    s.close_poll_grace_ms,
+    s.transport_staleness_ms ?? s.staleness_ms,
+    s.key.timeframe
+  )
+}
+
+function previewState(s: StreamStatus): PreviewHealth {
+  return previewHealth(
+    s.preview_enabled,
+    s.preview_connection_state,
+    s.last_preview_update_ms,
+    s.last_preview_error,
+    s.key.timeframe
+  )
 }
 
 const filtered = computed(() => {
@@ -91,6 +115,21 @@ function freshnessTone(state: Freshness): 'green' | 'yellow' | 'red' | 'neutral'
       return 'yellow'
     case 'error':
       return 'red'
+  }
+}
+
+function previewTone(state: PreviewHealth): 'green' | 'yellow' | 'red' | 'neutral' {
+  switch (state) {
+    case 'live':
+      return 'green'
+    case 'lagging':
+      return 'yellow'
+    case 'stale':
+      return 'yellow'
+    case 'error':
+      return 'red'
+    case 'off':
+      return 'neutral'
   }
 }
 
@@ -198,10 +237,17 @@ function feedHref(s: StreamStatus): string {
                     {{ s.key.timeframe }}
                   </div>
                 </div>
-                <StatusPill
-                  :label="freshnessLabel(streamState(s))"
-                  :tone="freshnessTone(streamState(s))"
-                />
+                <div class="flex flex-col items-end gap-1.5">
+                  <StatusPill
+                    :label="`Closed ${freshnessLabel(streamState(s))}`"
+                    :tone="freshnessTone(streamState(s))"
+                  />
+                  <StatusPill
+                    v-if="s.preview_enabled"
+                    :label="`Preview ${previewHealthLabel(previewState(s))}`"
+                    :tone="previewTone(previewState(s))"
+                  />
+                </div>
               </div>
 
               <Sparkline
@@ -211,24 +257,39 @@ function feedHref(s: StreamStatus): string {
                 area
               />
 
-              <div class="flex items-end justify-between">
+              <div class="grid grid-cols-2 gap-3">
                 <div>
-                  <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Close</div>
+                  <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Confirmed</div>
                   <div class="font-data tabular-nums text-[18px]">
                     {{ fmtNumber(s.latest_bar?.close ?? 0, 4) }}
                   </div>
                 </div>
                 <div class="text-right">
-                  <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Bar</div>
-                  <div class="text-[12px] font-data">
-                    {{ fmtRelative(s.latest_bar?.timestamp) }}
+                  <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Preview</div>
+                  <div class="font-data tabular-nums text-[18px]">
+                    {{ s.preview_enabled ? fmtNumber(s.latest_preview_bar?.close ?? 0, 4) : '—' }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3 text-[12px] font-data text-ink-soft">
+                <div>
+                  <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Closed</div>
+                  <div>
+                    {{ fmtRelativeMs(s.confirmed_bar_close_ms) }}
+                  </div>
+                </div>
+                <div class="text-right">
+                  <div class="text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-data">Preview age</div>
+                  <div>
+                    {{ s.preview_enabled ? fmtRelativeMs(s.last_preview_update_ms) : '—' }}
                   </div>
                 </div>
               </div>
 
               <div class="flex items-center justify-between text-[11px] text-ink-soft font-data pt-2 hairline-t">
                 <span>Bots: {{ s.attached_instances?.length ?? 0 }}</span>
-                <span>Errors: {{ s.error_count ?? 0 }}</span>
+                <span>Poll age: {{ fmtRelativeMs(s.last_success_ms) }}</span>
               </div>
             </NuxtLink>
           </div>

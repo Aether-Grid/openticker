@@ -125,6 +125,24 @@ export function extractItems<T>(payload: { items?: T[] } | T[] | undefined | nul
 }
 
 export type Freshness = 'ok' | 'warn' | 'stale' | 'error'
+export type PreviewHealth = 'off' | 'live' | 'lagging' | 'stale' | 'error'
+
+export function timeframeToMs(timeframe: string | null | undefined): number | null {
+  const match = (timeframe ?? '').match(/^(\d+)(m|h|d)$/i)
+  if (!match) return null
+  const value = Number(match[1])
+  if (!Number.isFinite(value) || value <= 0) return null
+  switch (match[2]?.toLowerCase()) {
+    case 'm':
+      return value * 60_000
+    case 'h':
+      return value * 60 * 60_000
+    case 'd':
+      return value * 24 * 60 * 60_000
+    default:
+      return null
+  }
+}
 
 export function streamFreshness(
   stalenessMs: number | null | undefined,
@@ -143,11 +161,70 @@ export function streamFreshness(
   return 'stale'
 }
 
+export function closedBarFreshness(
+  confirmedBarStalenessMs: number | null | undefined,
+  lastError?: string | null,
+  pollingIntervalMs?: number | null,
+  closePollGraceMs?: number | null,
+  fallbackTransportStalenessMs?: number | null,
+  timeframe?: string | null
+): Freshness {
+  if (lastError) return 'error'
+  if (confirmedBarStalenessMs !== null && confirmedBarStalenessMs !== undefined) {
+    const cadenceMs = Math.max(pollingIntervalMs ?? 60_000, 1)
+    const riskGraceMs = Math.max(closePollGraceMs ?? 0, 0)
+    const timeframeMs = timeframeToMs(timeframe) ?? 60_000
+    const closeSlackMs = Math.max(cadenceMs * 2, riskGraceMs, 60_000)
+    const warnAtMs = closeSlackMs
+    const staleAtMs = Math.max(timeframeMs + closeSlackMs, closeSlackMs * 2)
+    if (confirmedBarStalenessMs <= warnAtMs) return 'ok'
+    if (confirmedBarStalenessMs <= staleAtMs) return 'warn'
+    return 'stale'
+  }
+  return streamFreshness(fallbackTransportStalenessMs, lastError, pollingIntervalMs, closePollGraceMs)
+}
+
+export function previewHealth(
+  enabled: boolean | null | undefined,
+  connectionState: string | null | undefined,
+  lastPreviewUpdateMs: number | null | undefined,
+  lastPreviewError: string | null | undefined,
+  timeframe: string | null | undefined,
+  nowMs = Date.now()
+): PreviewHealth {
+  if (!enabled) return 'off'
+  if (lastPreviewError) return 'error'
+  const state = (connectionState ?? '').toLowerCase()
+  if (state.includes('disconnect')) return 'error'
+  if (!lastPreviewUpdateMs) return state.includes('connect') ? 'lagging' : 'stale'
+
+  const ageMs = Math.max(nowMs - lastPreviewUpdateMs, 0)
+  const cadenceMs = timeframeToMs(timeframe) ?? 60_000
+  if (ageMs <= cadenceMs) return 'live'
+  if (ageMs <= cadenceMs * 2) return 'lagging'
+  return 'stale'
+}
+
 export function freshnessLabel(freshness: Freshness): string {
   switch (freshness) {
     case 'ok':
       return 'healthy'
     case 'warn':
+      return 'lagging'
+    case 'stale':
+      return 'stale'
+    case 'error':
+      return 'error'
+  }
+}
+
+export function previewHealthLabel(health: PreviewHealth): string {
+  switch (health) {
+    case 'off':
+      return 'off'
+    case 'live':
+      return 'live'
+    case 'lagging':
       return 'lagging'
     case 'stale':
       return 'stale'

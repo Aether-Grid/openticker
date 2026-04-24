@@ -1,6 +1,16 @@
 <script setup lang="ts">
-import type { OhlcvBar } from '~/types/api'
-import { fmtDateTime, fmtNumber, fmtRelative } from '~/utils/format'
+import type { OhlcvBar, StreamStatus } from '~/types/api'
+import type { PreviewHealth } from '~/utils/format'
+import {
+  closedBarFreshness,
+  fmtDateTime,
+  fmtNumber,
+  fmtRelative,
+  fmtRelativeMs,
+  freshnessLabel,
+  previewHealth,
+  previewHealthLabel
+} from '~/utils/format'
 
 definePageMeta({ layout: 'default' })
 
@@ -13,6 +23,7 @@ const { api } = useApi()
 
 const memoryBars = shallowRef<OhlcvBar[]>([])
 const historyBars = shallowRef<OhlcvBar[]>([])
+const streamStatus = shallowRef<StreamStatus | null>(null)
 const pendingMem = ref(false)
 const pendingHist = ref(false)
 const lastLoadedAt = ref<Date | null>(null)
@@ -27,6 +38,8 @@ const loadMemory = async () => {
   try {
     const data = await api<{ bars: OhlcvBar[] } | OhlcvBar[]>(`${streamPath.value}/bars?limit=200`)
     memoryBars.value = Array.isArray(data) ? data : (data.bars ?? [])
+    const streams = await api<StreamStatus[]>('/v1/data/streams')
+    streamStatus.value = streams.find((s) => streamMatchesRoute(s)) ?? null
     lastLoadedAt.value = new Date()
   } finally {
     pendingMem.value = false
@@ -57,8 +70,28 @@ const high24 = computed(() => (memoryBars.value.length ? Math.max(...memoryBars.
 const low24 = computed(() => (memoryBars.value.length ? Math.min(...memoryBars.value.map((b) => b.low)) : null))
 const vol = computed(() => memoryBars.value.reduce((acc, b) => acc + (b.volume ?? 0), 0))
 
+const closedState = computed(() =>
+  closedBarFreshness(
+    streamStatus.value?.confirmed_bar_staleness_ms,
+    streamStatus.value?.last_error,
+    streamStatus.value?.polling_interval_ms,
+    streamStatus.value?.close_poll_grace_ms,
+    streamStatus.value?.transport_staleness_ms ?? streamStatus.value?.staleness_ms,
+    timeframe.value
+  )
+)
+const currentPreviewHealth = computed(() =>
+  previewHealth(
+    streamStatus.value?.preview_enabled,
+    streamStatus.value?.preview_connection_state,
+    streamStatus.value?.last_preview_update_ms,
+    streamStatus.value?.last_preview_error,
+    timeframe.value
+  )
+)
+
 const barsTable = [
-  { key: 'timestamp', label: 'Time' },
+  { key: 'timestamp', label: 'Opened' },
   { key: 'open', label: 'Open', align: 'right' as const },
   { key: 'high', label: 'High', align: 'right' as const },
   { key: 'low', label: 'Low', align: 'right' as const },
@@ -69,6 +102,27 @@ const barsTable = [
 function barField(row: OhlcvBar, key: string): number {
   const value = (row as unknown as Record<string, unknown>)[key]
   return typeof value === 'number' ? value : 0
+}
+
+function streamMatchesRoute(stream: StreamStatus): boolean {
+  return (
+    stream.key.account_id === account.value &&
+    stream.key.symbol === symbol.value &&
+    stream.key.timeframe === timeframe.value
+  )
+}
+
+function freshnessTone(state: ReturnType<typeof closedBarFreshness>): 'green' | 'yellow' | 'red' | 'neutral' {
+  if (state === 'ok') return 'green'
+  if (state === 'error') return 'red'
+  return 'yellow'
+}
+
+function previewTone(state: PreviewHealth): 'green' | 'yellow' | 'red' | 'neutral' {
+  if (state === 'live') return 'green'
+  if (state === 'error') return 'red'
+  if (state === 'off') return 'neutral'
+  return 'yellow'
 }
 </script>
 
@@ -105,9 +159,18 @@ function barField(row: OhlcvBar, key: string): number {
         <PageHeader
           :eyebrow="account"
           :title="`${symbol} · ${timeframe}`"
-          :description="latest ? `Latest bar ${fmtDateTime(latest.timestamp)}` : 'Awaiting first bar.'"
+          :description="latest ? `Latest bar opened ${fmtDateTime(latest.timestamp)}` : 'Awaiting first bar.'"
         >
           <template #actions>
+            <StatusPill
+              :label="`Closed ${freshnessLabel(closedState)}`"
+              :tone="freshnessTone(closedState)"
+            />
+            <StatusPill
+              v-if="streamStatus?.preview_enabled"
+              :label="`Preview ${previewHealthLabel(currentPreviewHealth)}`"
+              :tone="previewTone(currentPreviewHealth)"
+            />
             <UButton
               color="neutral"
               variant="outline"
@@ -120,11 +183,24 @@ function barField(row: OhlcvBar, key: string): number {
           </template>
         </PageHeader>
 
-        <section class="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <section class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
           <MetricCard
-            label="Close"
+            label="Confirmed"
             :value="fmtNumber(latest?.close ?? 0, 4)"
-            hint="Latest bar"
+            :hint="
+              streamStatus?.confirmed_bar_close_ms
+                ? `Closed ${fmtRelativeMs(streamStatus.confirmed_bar_close_ms)}`
+                : 'Latest bar'
+            "
+          />
+          <MetricCard
+            label="Preview"
+            :value="streamStatus?.preview_enabled ? fmtNumber(streamStatus?.latest_preview_bar?.close ?? 0, 4) : '—'"
+            :hint="
+              streamStatus?.preview_enabled
+                ? `Updated ${fmtRelativeMs(streamStatus?.last_preview_update_ms)}`
+                : 'Disabled'
+            "
           />
           <MetricCard
             label="Open"
@@ -146,6 +222,12 @@ function barField(row: OhlcvBar, key: string): number {
             label="Volume"
             :value="fmtNumber(vol, 2)"
             hint="Buffer total"
+          />
+          <MetricCard
+            label="Last poll"
+            :value="fmtRelativeMs(streamStatus?.last_success_ms)"
+            :hint="streamStatus?.last_error ?? 'Transport recency'"
+            :accent="streamStatus?.last_error ? 'red' : 'neutral'"
           />
         </section>
 

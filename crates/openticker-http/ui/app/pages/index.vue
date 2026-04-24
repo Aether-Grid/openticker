@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ActivityRecord, BotSummary, ConnectorStatus, StreamStatus } from '~/types/api'
 import {
+  closedBarFreshness,
   extractItems,
   fmtCompact,
   fmtDate,
@@ -9,8 +10,9 @@ import {
   fmtRelative,
   freshnessLabel,
   pnlColor,
-  short,
-  streamFreshness
+  previewHealth,
+  previewHealthLabel,
+  short
 } from '~/utils/format'
 
 definePageMeta({ layout: 'default' })
@@ -56,10 +58,32 @@ const topBots = computed(() =>
 const healthyStreams = computed(
   () =>
     streams.value.filter(
-      (s) => streamFreshness(s.staleness_ms, s.last_error, s.polling_interval_ms, s.close_poll_grace_ms) === 'ok'
+      (s) =>
+        closedBarFreshness(
+          s.confirmed_bar_staleness_ms,
+          s.last_error,
+          s.polling_interval_ms,
+          s.close_poll_grace_ms,
+          s.transport_staleness_ms ?? s.staleness_ms,
+          s.key.timeframe
+        ) === 'ok'
     ).length
 )
 const staleStreams = computed(() => streams.value.length - healthyStreams.value)
+const previewLiveStreams = computed(
+  () =>
+    streams.value.filter(
+      (s) =>
+        previewHealth(
+          s.preview_enabled,
+          s.preview_connection_state,
+          s.last_preview_update_ms,
+          s.last_preview_error,
+          s.key.timeframe
+        ) === 'live'
+    ).length
+)
+const previewEnabledStreams = computed(() => streams.value.filter((s) => s.preview_enabled).length)
 const connectorsUp = computed(
   () => connectors.value.filter((c) => (c.state ?? '').toLowerCase().includes('connect')).length
 )
@@ -99,6 +123,40 @@ function connectorTone(state?: string): 'green' | 'yellow' | 'red' | 'neutral' {
   if (s.includes('degrad')) return 'yellow'
   if (s.includes('disconn') || s.includes('err')) return 'red'
   return 'neutral'
+}
+
+function closedState(stream: StreamStatus) {
+  return closedBarFreshness(
+    stream.confirmed_bar_staleness_ms,
+    stream.last_error,
+    stream.polling_interval_ms,
+    stream.close_poll_grace_ms,
+    stream.transport_staleness_ms ?? stream.staleness_ms,
+    stream.key.timeframe
+  )
+}
+
+function previewState(stream: StreamStatus) {
+  return previewHealth(
+    stream.preview_enabled,
+    stream.preview_connection_state,
+    stream.last_preview_update_ms,
+    stream.last_preview_error,
+    stream.key.timeframe
+  )
+}
+
+function freshnessTone(state: ReturnType<typeof closedState>): 'green' | 'yellow' | 'red' | 'neutral' {
+  if (state === 'ok') return 'green'
+  if (state === 'error') return 'red'
+  return 'yellow'
+}
+
+function previewTone(state: ReturnType<typeof previewState>): 'green' | 'yellow' | 'red' | 'neutral' {
+  if (state === 'live') return 'green'
+  if (state === 'error') return 'red'
+  if (state === 'off') return 'neutral'
+  return 'yellow'
 }
 </script>
 
@@ -221,7 +279,13 @@ function connectorTone(state?: string): 'green' | 'yellow' | 'red' | 'neutral' {
             <MetricCard
               label="Data streams"
               :value="`${healthyStreams}/${streams.length}`"
-              :hint="staleStreams ? `${staleStreams} stale` : 'All fresh'"
+              :hint="
+                previewEnabledStreams
+                  ? `Preview ${previewLiveStreams}/${previewEnabledStreams} live`
+                  : staleStreams
+                    ? `${staleStreams} closed stale`
+                    : 'Closed bars fresh'
+              "
               :accent="staleStreams ? 'yellow' : 'green'"
             />
           </div>
@@ -432,16 +496,17 @@ function connectorTone(state?: string): 'green' | 'yellow' | 'red' | 'neutral' {
                     {{ fmtNumber(stream.latest_bar?.close ?? 0, 4) }}
                   </div>
                   <div class="text-[10.5px] text-ink-soft font-data uppercase tracking-[0.12em]">
-                    {{
-                      freshnessLabel(
-                        streamFreshness(
-                          stream.staleness_ms,
-                          stream.last_error,
-                          stream.polling_interval_ms,
-                          stream.close_poll_grace_ms
-                        )
-                      )
-                    }}
+                    <div class="flex flex-col items-end gap-1">
+                      <StatusPill
+                        :label="`Closed ${freshnessLabel(closedState(stream))}`"
+                        :tone="freshnessTone(closedState(stream))"
+                      />
+                      <StatusPill
+                        v-if="stream.preview_enabled"
+                        :label="`Preview ${previewHealthLabel(previewState(stream))}`"
+                        :tone="previewTone(previewState(stream))"
+                      />
+                    </div>
                   </div>
                 </div>
               </NuxtLink>
