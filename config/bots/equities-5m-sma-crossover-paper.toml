@@ -1,5 +1,5 @@
 id = "equities-5m-sma-crossover-paper"
-enabled = true
+enabled = false
 allow_live = false
 market = "equities"
 symbols = ["AAPL", "MSFT", "COIN", "PLTR", "TSLA"]

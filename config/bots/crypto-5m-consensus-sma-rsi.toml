@@ -1,5 +1,5 @@
 id = "crypto-5m-consensus-sma-rsi"
-enabled = true
+enabled = false
 allow_live = false
 market = "crypto"
 symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
