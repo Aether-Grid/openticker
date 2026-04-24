@@ -35,6 +35,7 @@ struct StreamEntry {
     last_error: Option<String>,
     preview_connection_state: Option<StreamPreviewConnectionState>,
     last_preview_update_ms: Option<i64>,
+    latest_preview_bar: Option<OhlcvBar>,
     last_preview_error: Option<String>,
     last_confirmed_update_source: Option<StreamUpdateSource>,
     fetch_count: u64,
@@ -172,8 +173,11 @@ impl DataPlane {
             .ok_or_else(|| DataPlaneError::UnknownStream(key.clone()))?;
         entry.last_success_ms = Some(now_ms);
         entry.last_error = None;
-        entry.last_confirmed_update_source = Some(source);
-        Ok(entry.buffer.push_if_newer(bar))
+        let appended = entry.buffer.push_if_newer(bar);
+        if appended {
+            entry.last_confirmed_update_source = Some(source);
+        }
+        Ok(appended)
     }
 
     /// Records a fetch error for an already-registered stream.
@@ -238,6 +242,7 @@ impl DataPlane {
         &self,
         key: &StreamKey,
         now_ms: i64,
+        bar: OhlcvBar,
     ) -> Result<(), DataPlaneError> {
         let mut state = self.state.lock().expect("dataplane state lock poisoned");
         let entry = state
@@ -245,6 +250,7 @@ impl DataPlane {
             .get_mut(key)
             .ok_or_else(|| DataPlaneError::UnknownStream(key.clone()))?;
         entry.last_preview_update_ms = Some(now_ms);
+        entry.latest_preview_bar = Some(bar);
         entry.preview_connection_state = Some(StreamPreviewConnectionState::Connected);
         entry.last_preview_error = None;
         Ok(())
@@ -426,6 +432,7 @@ impl StreamEntry {
             last_error: None,
             preview_connection_state: None,
             last_preview_update_ms: None,
+            latest_preview_bar: None,
             last_preview_error: None,
             last_confirmed_update_source: None,
             fetch_count: 0,
@@ -434,8 +441,24 @@ impl StreamEntry {
     }
 
     fn status(&self, now_ms: i64, sparkline_limit: usize) -> StreamStatus {
-        let staleness_ms = self.last_success_ms.map(|last_success_ms| {
+        let transport_staleness_ms = self.last_success_ms.map(|last_success_ms| {
             u64::try_from(now_ms.saturating_sub(last_success_ms)).unwrap_or(0)
+        });
+        let latest_bar = self.buffer.latest();
+        let confirmed_bar_close_ms = latest_bar.as_ref().map(|bar| {
+            let timeframe_ms =
+                i64::try_from(self.spec.key.timeframe.duration().as_millis()).unwrap_or(i64::MAX);
+            bar.timestamp
+                .timestamp_millis()
+                .saturating_add(timeframe_ms)
+        });
+        let confirmed_bar_staleness_ms = confirmed_bar_close_ms
+            .map(|close_ms| u64::try_from(now_ms.saturating_sub(close_ms)).unwrap_or(0));
+        let confirmed_bar_stale_deadline_ms = confirmed_bar_close_ms.and_then(|close_ms| {
+            self.spec.close_poll_grace_ms.map(|grace_ms| {
+                let grace_ms = i64::try_from(grace_ms).unwrap_or(i64::MAX);
+                close_ms.saturating_add(grace_ms)
+            })
         });
         let attached_instances = self
             .spec
@@ -456,10 +479,15 @@ impl StreamEntry {
             last_attempt_ms: self.last_attempt_ms,
             last_success_ms: self.last_success_ms,
             last_error: self.last_error.clone(),
-            latest_bar: self.buffer.latest(),
+            latest_bar,
             fetch_count: self.fetch_count,
             error_count: self.error_count,
-            staleness_ms,
+            transport_staleness_ms,
+            staleness_ms: transport_staleness_ms,
+            confirmed_bar_close_ms,
+            confirmed_bar_staleness_ms,
+            confirmed_bar_stale_deadline_ms,
+            latest_preview_bar: self.latest_preview_bar.clone(),
             preview_enabled: self.spec.preview_enabled,
             preview_connection_state: self.preview_connection_state,
             last_preview_update_ms: self.last_preview_update_ms,

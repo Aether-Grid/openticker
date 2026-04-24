@@ -177,11 +177,66 @@ fn snapshot_includes_attached_instances_and_staleness() {
     let snapshot = data_plane.snapshot_streams(2_000, 30);
     assert_eq!(snapshot.len(), 1);
     assert_eq!(snapshot[0].staleness_ms, Some(750));
+    assert_eq!(snapshot[0].transport_staleness_ms, Some(750));
+    assert_eq!(snapshot[0].confirmed_bar_close_ms, Some(120_000));
+    assert_eq!(snapshot[0].confirmed_bar_staleness_ms, Some(0));
+    assert_eq!(snapshot[0].confirmed_bar_stale_deadline_ms, None);
     assert_eq!(
         snapshot[0].attached_instances,
         vec!["aapl-confirmation".to_owned(), "aapl-primary".to_owned()]
     );
     assert_eq!(snapshot[0].sparkline, vec![100.0]);
+}
+
+#[test]
+fn duplicate_confirmed_fetch_does_not_advance_confirmed_source_or_freshness() {
+    let stream_key = key("alpaca-paper", "AAPL", Timeframe::M1);
+    let data_plane = DataPlane::new([StreamSpec {
+        key: stream_key.clone(),
+        retention: 500,
+        polling_interval_ms: 1_000,
+        close_poll_retry_ms: Some(2_000),
+        close_poll_grace_ms: Some(30_000),
+        preview_enabled: false,
+        sources: vec![StreamSource::Instance("aapl".to_owned())],
+    }]);
+
+    assert!(
+        data_plane
+            .record_fetched_bar(&stream_key, 60_500, bar(1, 100.0))
+            .unwrap()
+    );
+    let first = data_plane.snapshot_streams(61_000, 30).remove(0);
+    assert_eq!(
+        first.last_confirmed_update_source,
+        Some(StreamUpdateSource::Poll)
+    );
+    assert_eq!(first.confirmed_bar_close_ms, Some(120_000));
+    assert_eq!(first.confirmed_bar_staleness_ms, Some(0));
+
+    assert!(
+        !data_plane
+            .record_fetched_bar_from_source(
+                &stream_key,
+                62_000,
+                bar(1, 101.0),
+                StreamUpdateSource::PreviewStream,
+            )
+            .unwrap()
+    );
+
+    let duplicate = data_plane.snapshot_streams(62_500, 30).remove(0);
+    assert_eq!(duplicate.transport_staleness_ms, Some(500));
+    assert_eq!(
+        duplicate.last_confirmed_update_source,
+        Some(StreamUpdateSource::Poll)
+    );
+    assert_eq!(
+        duplicate.confirmed_bar_close_ms,
+        first.confirmed_bar_close_ms
+    );
+    assert_eq!(duplicate.confirmed_bar_staleness_ms, Some(0));
+    assert_eq!(duplicate.latest_bar.unwrap().close, 100.0);
 }
 
 #[test]

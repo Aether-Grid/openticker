@@ -7,9 +7,7 @@ use openticker_connectors::{
     ConnectorMarketStreamSubscription, ConnectorPreviewStreamEvent, ConnectorPreviewStreamSession,
     PreviewStreamConnectionState,
 };
-use openticker_dataplane::{
-    DataPlane, StreamKey, StreamPreviewConnectionState, StreamUpdateSource,
-};
+use openticker_dataplane::{DataPlane, StreamKey, StreamPreviewConnectionState};
 use openticker_gateway::Gateway;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -519,14 +517,9 @@ async fn handle_preview_event(
                 timeframe: subscription.timeframe,
             };
             let now_ms = crate::unix_now_ms();
-            let _ = data_plane.record_preview_update(&key, now_ms);
+            let _ = data_plane.record_preview_update(&key, now_ms, update.bar.clone());
             if matches!(update.phase, crate::SignalPhase::Confirmed) {
-                let _ = data_plane.record_fetched_bar_from_source(
-                    &key,
-                    now_ms,
-                    update.bar.clone(),
-                    StreamUpdateSource::PreviewStream,
-                );
+                return;
             }
 
             let mut runtime = runtime.write().await;
@@ -574,7 +567,8 @@ fn map_preview_state(state: PreviewStreamConnectionState) -> StreamPreviewConnec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::fixture_bundle;
+    use crate::test_support::{fixture_bundle, test_bar_at};
+    use crate::{NormalizedBarUpdate, SignalPhase, Timeframe};
 
     #[tokio::test]
     async fn polling_supervisor_starts_and_stops_cleanly() {
@@ -587,5 +581,59 @@ mod tests {
 
         let supervisor = RuntimePollingSupervisor::start(&runtime, data_plane);
         supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn preview_loop_ignores_confirmed_candle_close_updates() {
+        let mut runtime = Runtime::from_config(&fixture_bundle());
+        runtime.start_instance("aapl").expect("bot should start");
+        let runtime = Arc::new(RwLock::new(runtime));
+        let streams = {
+            let runtime = runtime.read().await;
+            runtime.effective_streams_for_dataplane()
+        };
+        let data_plane = Arc::new(DataPlane::new(streams));
+        let subscription = ConnectorMarketStreamSubscription {
+            symbol: "AAPL".to_owned(),
+            timeframe: Timeframe::M1,
+        };
+        let previous_dispatched = runtime
+            .read()
+            .await
+            .instance("aapl")
+            .expect("lane should exist")
+            .last_dispatched_bar_timestamp;
+
+        handle_preview_event(
+            &runtime,
+            &data_plane,
+            "alpaca-paper",
+            std::slice::from_ref(&subscription),
+            ConnectorPreviewStreamEvent::BarUpdate {
+                subscription: subscription.clone(),
+                update: NormalizedBarUpdate {
+                    symbol: "AAPL".to_owned(),
+                    phase: SignalPhase::Confirmed,
+                    bar: test_bar_at("2030-01-01T00:01:00Z", 101.0),
+                },
+            },
+        )
+        .await;
+
+        let stream = data_plane
+            .snapshot_streams(crate::unix_now_ms(), 1)
+            .remove(0);
+        assert!(stream.latest_bar.is_none());
+        assert_eq!(stream.latest_preview_bar.unwrap().close, 101.0);
+        assert!(stream.last_preview_update_ms.is_some());
+        assert_eq!(stream.last_confirmed_update_source, None);
+
+        let lane = runtime
+            .read()
+            .await
+            .instance("aapl")
+            .expect("lane should exist")
+            .last_dispatched_bar_timestamp;
+        assert_eq!(lane, previous_dispatched);
     }
 }
