@@ -1,16 +1,25 @@
 # syntax=docker/dockerfile:1.7
 
+FROM node:22-bookworm-slim AS ui-builder
+WORKDIR /app/crates/openticker-http/ui
+ENV CI=true
+
+COPY crates/openticker-http/ui/package.json crates/openticker-http/ui/pnpm-lock.yaml crates/openticker-http/ui/pnpm-workspace.yaml ./
+RUN corepack enable \
+    && corepack prepare pnpm@10.33.0 --activate \
+    && pnpm install --frozen-lockfile
+
+COPY crates/openticker-http/ui ./
+RUN pnpm build
+
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
-ENV CI=true
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
         libsqlite3-dev \
-        nodejs \
-        npm \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,6 +30,7 @@ ARG OPENTICKER_FEATURES=""
 ARG GITHUB_TOKEN=""
 
 COPY . .
+COPY --from=ui-builder /app/crates/openticker-http/ui/.output /app/crates/openticker-http/ui/.output
 RUN git submodule sync --recursive \
     && if [ -n "$GITHUB_TOKEN" ]; then \
         git \
@@ -30,11 +40,6 @@ RUN git submodule sync --recursive \
     else \
         git submodule update --init --recursive; \
     fi \
-    && npm install -g pnpm@10.33.0 \
-    && cd crates/openticker-http/ui \
-    && pnpm install --frozen-lockfile \
-    && pnpm build \
-    && cd /app \
     && cargo test --workspace ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"} \
     && cargo build --release -p openticker-cli ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"}
 
