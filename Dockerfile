@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        git \
         libsqlite3-dev \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -14,10 +15,18 @@ RUN apt-get update \
 # build (e.g. `indicators` to pull in the private indicator pack). Leave empty
 # for the pure OSS build.
 ARG OPENTICKER_FEATURES=""
+ARG GITHUB_TOKEN=""
 
 COPY . .
-RUN cargo test --workspace
-RUN cargo build --release -p openticker-cli ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"}
+RUN trap 'rm -f /root/.gitconfig' EXIT; \
+    if [ -n "$GITHUB_TOKEN" ]; then \
+        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
+        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
+    fi \
+    && git submodule sync --recursive \
+    && git submodule update --init --recursive \
+    && cargo test --workspace ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"} \
+    && cargo build --release -p openticker-cli ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"}
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
