@@ -2,6 +2,7 @@
 
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
+ENV CI=true
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
