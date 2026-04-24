@@ -8,6 +8,8 @@ RUN apt-get update \
         ca-certificates \
         git \
         libsqlite3-dev \
+        nodejs \
+        npm \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -27,6 +29,11 @@ RUN git submodule sync --recursive \
     else \
         git submodule update --init --recursive; \
     fi \
+    && npm install -g pnpm@10.33.0 \
+    && cd crates/openticker-http/ui \
+    && pnpm install --frozen-lockfile \
+    && pnpm build \
+    && cd /app \
     && cargo test --workspace ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"} \
     && cargo build --release -p openticker-cli ${OPENTICKER_FEATURES:+--features "$OPENTICKER_FEATURES"}
 
