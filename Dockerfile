@@ -20,8 +20,8 @@ ARG GITHUB_TOKEN=""
 COPY . .
 RUN trap 'rm -f /root/.gitconfig' EXIT; \
     if [ -n "$GITHUB_TOKEN" ]; then \
-        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
-        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
+        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
+        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
     fi \
     && git submodule sync --recursive \
     && git submodule update --init --recursive \
