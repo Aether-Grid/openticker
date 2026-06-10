@@ -4,6 +4,10 @@
  * account `cash_balance_assets`). Wraps UInputTags. When `uppercase` is set each
  * entry is trimmed and upper-cased before it is emitted, which matches how the
  * backend normalizes tickers. Empty/whitespace-only entries are dropped.
+ *
+ * Assumes a synchronously-echoing v-model: normalization runs in the computed
+ * setter, so the parent must reflect the emitted value back synchronously for
+ * the displayed chips to stay consistent (true for useConfigForm drafts).
  */
 const props = withDefaults(
   defineProps<{

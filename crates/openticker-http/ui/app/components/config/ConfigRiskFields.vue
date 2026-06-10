@@ -97,6 +97,24 @@ function setValue(key: RiskFieldKey, value: number | null) {
   emit('update:modelValue', { ...props.modelValue, [key]: value })
 }
 
+/**
+ * Handles a raw input change. In nullable (overrides) mode a cleared field maps
+ * to `null` (inherit). In required (profile) mode a required number field must
+ * never transiently hold `null`, so a cleared value falls back to the previous
+ * value (or 0).
+ */
+function onInput(key: RiskFieldKey, value: number | undefined) {
+  if (value === undefined) {
+    if (props.nullable) {
+      setValue(key, null)
+    } else {
+      setValue(key, valueOf(key) ?? 0)
+    }
+    return
+  }
+  setValue(key, value)
+}
+
 /** Clears a field back to inheritance (overrides only). */
 function clearValue(key: RiskFieldKey) {
   emit('update:modelValue', { ...props.modelValue, [key]: null })
@@ -120,7 +138,7 @@ function clearValue(key: RiskFieldKey) {
           :min="field.min"
           :placeholder="placeholderFor(field.key)"
           class="font-data w-full"
-          @update:model-value="(v: number | undefined) => setValue(field.key, v ?? null)"
+          @update:model-value="(v: number | undefined) => onInput(field.key, v)"
         />
         <UTooltip
           v-if="nullable && valueOf(field.key) !== null"

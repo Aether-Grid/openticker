@@ -40,13 +40,25 @@ const emit = defineEmits<{
 }>()
 
 const hasConflict = computed(() => props.conflict || (props.unmappedViolations?.length ?? 0) > 0)
+
+// "Keep editing" dismisses the stale banner locally without reloading or
+// discarding. The flag resets whenever `stale` re-triggers (false -> true) so a
+// fresh on-disk change surfaces the alert again.
+const dismissedStale = ref(false)
+watch(
+  () => props.stale,
+  (isStale) => {
+    if (!isStale) dismissedStale.value = false
+  }
+)
+const showStale = computed(() => props.stale && !dismissedStale.value)
 </script>
 
 <template>
   <div class="relative pb-24">
     <div class="space-y-4">
       <UAlert
-        v-if="stale"
+        v-if="showStale"
         color="warning"
         variant="subtle"
         icon="i-lucide-triangle-alert"
@@ -67,6 +79,7 @@ const hasConflict = computed(() => props.conflict || (props.unmappedViolations?.
             variant="ghost"
             size="xs"
             label="Keep editing"
+            @click="dismissedStale = true"
           />
         </template>
       </UAlert>

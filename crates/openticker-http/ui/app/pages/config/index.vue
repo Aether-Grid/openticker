@@ -13,7 +13,6 @@ const router = useRouter()
 const pending = ref(false)
 const lastLoadedAt = ref<Date | null>(null)
 const effective = shallowRef<EffectiveConfig | null>(null)
-const matrix = shallowRef<unknown>(null)
 const openapi = shallowRef<OpenApiSpec | null>(null)
 const metrics = ref<string>('')
 
@@ -24,14 +23,12 @@ const selectedPath = ref<string | null>(null)
 const load = async () => {
   pending.value = true
   try {
-    const [cfg, m, spec, met] = await Promise.all([
+    const [cfg, spec, met] = await Promise.all([
       api<EffectiveConfig>('/v1/config/effective').catch(() => null),
-      api<unknown>('/v1/connectors/matrix').catch(() => null),
       api<OpenApiSpec>('/openapi.json').catch(() => null),
       api<string>('/metrics', { responseType: 'text' }).catch(() => '')
     ])
     effective.value = cfg
-    matrix.value = m
     openapi.value = spec
     metrics.value = typeof met === 'string' ? met : ''
     lastLoadedAt.value = new Date()
@@ -161,6 +158,13 @@ function askDelete(bot: BotConfig) {
   deleteTarget.value = bot
   deleteError.value = null
   deleteOpen.value = true
+}
+
+function cancelDelete() {
+  if (deleting.value) return
+  deleteOpen.value = false
+  deleteTarget.value = null
+  deleteError.value = null
 }
 
 async function confirmDelete() {
@@ -581,7 +585,8 @@ async function reloadFromDisk() {
                 variant="ghost"
                 size="sm"
                 label="Cancel"
-                @click="deleteOpen = false"
+                :disabled="deleting"
+                @click="cancelDelete"
               />
               <UButton
                 color="error"
