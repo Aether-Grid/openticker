@@ -30,6 +30,37 @@ const emit = defineEmits<{
 
 const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']
 
+/**
+ * Synthetic per-row keys for the row `v-for`. These are component-local only and
+ * are NEVER emitted into the saved `DataPlaneWatchlistEntry[]` (the backend
+ * writes that array to TOML and must not gain an id field). Using the array
+ * index as the key would let Vue reuse input/select DOM + component instances
+ * for different data when a middle row is removed, stranding transient widget
+ * state (focus, open dropdowns) on the wrong row. The keys mirror `modelValue`
+ * by position: edits (patchRow) keep length/order so keys stay stable, while
+ * add/remove and external length changes reconcile the array below.
+ */
+let nextRowKey = 0
+function freshKey(): number {
+  return nextRowKey++
+}
+const rowKeys = ref<number[]>(props.modelValue.map(() => freshKey()))
+
+// Resync keys to modelValue length when the parent replaces the array
+// (e.g. reload/discard). Edits via patchRow do not change length, so keys
+// remain stable; only add/remove (handled locally) and external swaps land here.
+watch(
+  () => props.modelValue.length,
+  (len) => {
+    if (rowKeys.value.length === len) return
+    if (len < rowKeys.value.length) {
+      rowKeys.value = rowKeys.value.slice(0, len)
+    } else {
+      while (rowKeys.value.length < len) rowKeys.value.push(freshKey())
+    }
+  }
+)
+
 const accountItems = computed(() => props.accounts.map((id) => ({ label: id, value: id })))
 const timeframeItems = TIMEFRAMES.map((tf) => ({ label: tf, value: tf }))
 
@@ -51,8 +82,18 @@ function setAccount(index: number, value: string) {
   patchRow(index, { account: value })
 }
 
+// Live edits only upper-case (length-preserving, no caret jump). Trimming is
+// deferred to commit (blur) so internal spaces are not stripped mid-typing,
+// matching the commit-time normalization in ConfigStringList.
 function setSymbol(index: number, value: string) {
-  patchRow(index, { symbol: value.toUpperCase().trim() })
+  patchRow(index, { symbol: value.toUpperCase() })
+}
+
+function commitSymbol(index: number) {
+  const trimmed = (props.modelValue[index]?.symbol ?? '').trim()
+  if (trimmed !== props.modelValue[index]?.symbol) {
+    patchRow(index, { symbol: trimmed })
+  }
 }
 
 function setTimeframe(index: number, value: Timeframe) {
@@ -68,6 +109,7 @@ function setRetention(index: number, value: number | undefined) {
 }
 
 function removeRow(index: number) {
+  rowKeys.value.splice(index, 1)
   emit(
     'update:modelValue',
     props.modelValue.filter((_, i) => i !== index).map((row) => ({ ...row }))
@@ -82,6 +124,7 @@ function addRow() {
     polling_interval_ms: null,
     retention: null
   }
+  rowKeys.value.push(freshKey())
   emit('update:modelValue', [...props.modelValue.map((row) => ({ ...row })), next])
 }
 </script>
@@ -120,7 +163,7 @@ function addRow() {
         <!-- Rows -->
         <div
           v-for="(entry, index) in modelValue"
-          :key="index"
+          :key="rowKeys[index] ?? index"
           class="grid grid-cols-1 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 px-4 py-3 border-b border-[color:var(--color-hairline)] last:border-b-0"
         >
           <ConfigField
@@ -162,6 +205,7 @@ function addRow() {
               placeholder="BTC-USDT"
               class="font-data w-full"
               @update:model-value="(v: string) => setSymbol(index, v)"
+              @blur="commitSymbol(index)"
             />
           </ConfigField>
           <div class="hidden lg:block">
@@ -170,6 +214,7 @@ function addRow() {
               placeholder="BTC-USDT"
               class="font-data w-full"
               @update:model-value="(v: string) => setSymbol(index, v)"
+              @blur="commitSymbol(index)"
             />
             <p
               v-if="errorFor(index, 'symbol')"
