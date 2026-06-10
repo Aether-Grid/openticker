@@ -24,6 +24,12 @@ const riskProfiles = ref<RiskProfileConfig[]>([])
 // make the form's type circular).
 const draftId = ref('')
 
+// Set just before navigating away after a successful create so the
+// onBeforeRouteLeave guard allows the programmatic push. Without this the draft
+// (filled) still differs from `original` (blank template) at navigation time, so
+// the dirty-confirm would fire on a SUCCESSFUL create and strand the user.
+const navigating = ref(false)
+
 /** A sensible blank-slate bot, parameterised by the first available ids. */
 function template(): BotConfig {
   const firstAccount = accounts.value[0]?.id ?? ''
@@ -64,6 +70,10 @@ const form = useConfigForm<BotConfig>({
   save: async (draft, generation) => {
     const result = await actions.createBot(draft, generation)
     if (result.ok) {
+      // Allow the leave guard through before pushing: the draft is still "dirty"
+      // vs the blank template, but this navigation is the success path, not a
+      // user bailing out mid-edit, so it must not pop the discard confirm.
+      navigating.value = true
       // Navigate to the new bot's editor; the create form is unmounted so its
       // own reload never runs against a now-stale empty template.
       await router.push(`/config/bots/${draft.id}`)
@@ -97,6 +107,10 @@ onMounted(async () => {
 })
 
 onBeforeRouteLeave(() => {
+  // Allow the post-create navigation unconditionally (see `navigating`). For any
+  // other leave (user clicks away mid-edit), keep the dirty-confirm: returning
+  // false blocks the navigation, true/undefined allows it.
+  if (navigating.value) return true
   if (form.dirty.value && !window.confirm('Discard unsaved changes?')) return false
   return true
 })
@@ -181,7 +195,6 @@ function setConstraint(key: 'quantity_step' | 'min_quantity' | 'min_notional_usd
           :pending="form.pending.value"
           @save="form.submit"
           @discard="form.discard"
-          @reload="form.load"
         >
           <div
             v-if="form.draft.value"

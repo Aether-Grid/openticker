@@ -31,7 +31,13 @@ const emit = defineEmits<{
   'update:modelValue': [value: IndicatorInstanceConfig[]]
 }>()
 
-const ROLE_ITEMS: { label: string; value: IndicatorRole }[] = [
+// USelect has no `clearable` prop, so a "Default (inherit)" item with an
+// `undefined` value is how the user resets role / signal_policy. The setters map
+// `undefined -> null`, and a loaded null binds to `undefined` (see template), so
+// selecting Default round-trips to a cleared field and a cleared field shows
+// Default. The item value type allows undefined to match the bound model.
+const ROLE_ITEMS: { label: string; value: IndicatorRole | undefined }[] = [
+  { label: 'Default (inherit)', value: undefined },
   { label: 'primary signal', value: 'primary_signal' },
   { label: 'filter', value: 'filter' },
   { label: 'context', value: 'context' },
@@ -39,7 +45,8 @@ const ROLE_ITEMS: { label: string; value: IndicatorRole }[] = [
   { label: 'research only', value: 'research_only' }
 ]
 
-const SIGNAL_POLICY_ITEMS: { label: string; value: IndicatorSignalPolicy }[] = [
+const SIGNAL_POLICY_ITEMS: { label: string; value: IndicatorSignalPolicy | undefined }[] = [
+  { label: 'Default (inherit)', value: undefined },
   { label: 'preview allowed', value: 'preview_allowed' },
   { label: 'confirmed required', value: 'confirmed_required' }
 ]
