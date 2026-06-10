@@ -2036,6 +2036,76 @@ fn render_updated_document_keeps_absent_default_keys_absent() {
 }
 
 #[test]
+fn render_updated_document_preserves_unknown_keys_and_their_comments() {
+    let raw = WRITING_INSTANCE_FIXTURE.replace(
+        "polling_interval_ms = 1000\n",
+        "polling_interval_ms = 1000\n\n# Reserved for phase-3 tooling\nfuture_flag = \"keep-me\"\n",
+    );
+    let mut next: InstanceConfig = toml::from_str(&raw).expect("fixture should parse");
+    next.budget.pct = 33.0;
+
+    let rendered = render_updated_document(&raw, &next).expect("document should render");
+
+    assert!(rendered.contains("# Reserved for phase-3 tooling"));
+    assert!(rendered.contains(r#"future_flag = "keep-me""#));
+    assert!(rendered.contains("pct = 33.0"));
+    assert!(!rendered.contains("pct = 10.0"));
+}
+
+#[test]
+fn render_updated_document_preserves_dotted_and_inline_table_styles() {
+    let raw = WRITING_INSTANCE_FIXTURE
+        .replace(
+            "polling_interval_ms = 1000\n",
+            "polling_interval_ms = 1000\nexecution_constraints = { min_quantity = 1.0 }\nrisk.profile = \"crypto-default\"\n",
+        )
+        .replace("\n[risk]\nprofile = \"crypto-default\"\n", "")
+        .replace("\n[risk.overrides]\nstale_data_ms = 30000\n", "");
+    let mut next: InstanceConfig = toml::from_str(&raw).expect("fixture should parse");
+    next.risk.profile = "crypto-aggressive".to_owned();
+    next.execution_constraints.min_quantity = Some(2.5);
+
+    let rendered = render_updated_document(&raw, &next).expect("document should render");
+
+    assert!(rendered.contains(r#"risk.profile = "crypto-aggressive""#));
+    assert!(rendered.contains("execution_constraints = { min_quantity = 2.5 }"));
+    let reparsed: InstanceConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(reparsed.risk.profile, "crypto-aggressive");
+    assert_eq!(reparsed.execution_constraints.min_quantity, Some(2.5));
+}
+
+#[test]
+fn render_updated_document_rejects_invalid_existing_toml() {
+    let next: InstanceConfig =
+        toml::from_str(WRITING_INSTANCE_FIXTURE).expect("fixture should parse");
+
+    let result = render_updated_document("id = \"unterminated", &next);
+
+    assert!(matches!(result, Err(ConfigError::Render { .. })));
+}
+
+#[test]
+fn render_updated_document_does_not_materialize_absent_table_defaults() {
+    let raw = WRITING_GLOBAL_FIXTURE.replace(
+        "\n[data_plane]\ndefault_polling_interval_ms = 5000\ndefault_retention = 500\n",
+        "",
+    );
+    assert!(!raw.contains("data_plane"));
+    let mut next: GlobalConfig = toml::from_str(&raw).expect("fixture should parse");
+    next.data_plane.default_retention = 750;
+
+    let rendered = render_updated_document(&raw, &next).expect("document should render");
+
+    assert!(rendered.contains("default_retention = 750"));
+    assert!(!rendered.contains("default_polling_interval_ms"));
+    assert!(!rendered.contains("watchlist"));
+    let reparsed: GlobalConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(reparsed.data_plane.default_retention, 750);
+    assert_eq!(reparsed.data_plane.default_polling_interval_ms, 5_000);
+    assert!(reparsed.data_plane.watchlist.is_empty());
+}
+
+#[test]
 fn render_updated_document_replaces_changed_indicators() {
     let mut next: InstanceConfig =
         toml::from_str(WRITING_INSTANCE_FIXTURE).expect("fixture should parse");
@@ -2252,6 +2322,8 @@ profile = "real-risk-id"
     let sources = load_sources_from_dir(&fixture_dir).expect("sources should load");
 
     assert_eq!(sources.config_dir, fixture_dir);
+    assert_eq!(sources.accounts_dir, fixture_dir.join("accounts"));
+    assert_eq!(sources.risk_dir, fixture_dir.join("risk"));
     assert_eq!(sources.bots_dir, fixture_dir.join("bots"));
 
     let instance = sources

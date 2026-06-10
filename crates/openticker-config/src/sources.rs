@@ -21,6 +21,8 @@ pub struct SourceFile<T> {
 #[derive(Debug, Clone)]
 pub struct ConfigSources {
     pub config_dir: PathBuf,
+    pub accounts_dir: PathBuf,
+    pub risk_dir: PathBuf,
     pub bots_dir: PathBuf,
     pub global: SourceFile<GlobalConfig>,
     pub accounts: Vec<SourceFile<AccountConfig>>,
@@ -51,6 +53,8 @@ pub fn load_sources_from_dir(dir: impl AsRef<Path>) -> Result<ConfigSources, Con
 
     Ok(ConfigSources {
         config_dir: config_dir.to_path_buf(),
+        accounts_dir,
+        risk_dir,
         bots_dir,
         global,
         accounts,
@@ -84,18 +88,27 @@ impl ConfigSources {
     }
 
     /// Looks up a bot instance source by its parsed `id`.
+    ///
+    /// Ids are not guaranteed unique until the bundle validates; this returns
+    /// the first match in sorted path order.
     #[must_use]
     pub fn instance_by_id(&self, id: &str) -> Option<&SourceFile<InstanceConfig>> {
         self.instances.iter().find(|file| file.value.id == id)
     }
 
     /// Looks up an account source by its parsed `id`.
+    ///
+    /// Ids are not guaranteed unique until the bundle validates; this returns
+    /// the first match in sorted path order.
     #[must_use]
     pub fn account_by_id(&self, id: &str) -> Option<&SourceFile<AccountConfig>> {
         self.accounts.iter().find(|file| file.value.id == id)
     }
 
     /// Looks up a risk profile source by its parsed `id`.
+    ///
+    /// Ids are not guaranteed unique until the bundle validates; this returns
+    /// the first match in sorted path order.
     #[must_use]
     pub fn risk_profile_by_id(&self, id: &str) -> Option<&SourceFile<RiskProfileConfig>> {
         self.risk_profiles.iter().find(|file| file.value.id == id)

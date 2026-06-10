@@ -4,6 +4,7 @@ use serde::de::DeserializeOwned;
 use std::fs;
 use std::io::Write as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use toml_edit::DocumentMut;
 
 /// Renders an updated TOML document by merging value changes from `next` into
@@ -47,16 +48,20 @@ pub fn render_new_document<T: Serialize>(value: &T) -> Result<String, ConfigErro
 
 /// Atomically replaces `path` with `contents`.
 ///
-/// The contents are written to a temp file named `.{filename}.tmp-{pid}` in the
-/// same directory, fsynced, and renamed over the target so readers never observe
-/// a partially written file. The leading dot and non-`.toml` suffix keep
-/// directory scanners and file watchers from picking the temp file up.
+/// The contents are written to a temp file named `.{filename}.tmp-{pid}-{seq}`
+/// in the same directory, fsynced, and renamed over the target so readers never
+/// observe a partially written file. The leading dot and non-`.toml` suffix keep
+/// directory scanners and file watchers from picking the temp file up, and the
+/// process-wide sequence number keeps concurrent writes in one process from
+/// truncating each other's temp file between fsync and rename.
 ///
 /// # Errors
 ///
 /// Returns [`ConfigError::Io`] when the temp file cannot be written or the
 /// rename over the target fails.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<(), ConfigError> {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
     let Some(file_name) = path.file_name() else {
         return Err(ConfigError::Io {
             path: path.to_path_buf(),
@@ -66,9 +71,10 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), ConfigError> {
 
     let directory = path.parent().unwrap_or_else(|| Path::new(""));
     let temp_path = directory.join(format!(
-        ".{}.tmp-{}",
+        ".{}.tmp-{}-{}",
         file_name.to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
     ));
 
     if let Err(source) = write_and_sync(&temp_path, contents) {
@@ -119,12 +125,22 @@ fn apply_table_diff(
         }
         if let (Some(toml::Value::Table(current_child)), toml::Value::Table(next_child)) =
             (current.get(key), next_value)
-            && let Some(child) = document
+        {
+            // When the table is absent on disk, start from an empty implicit
+            // table and recurse so only genuinely changed keys are written —
+            // a wholesale insert would pin every sibling serde default.
+            if !document.contains_key(key) {
+                let mut placeholder = toml_edit::Table::new();
+                placeholder.set_implicit(true);
+                document.insert(key, toml_edit::Item::Table(placeholder));
+            }
+            if let Some(child) = document
                 .get_mut(key)
                 .and_then(toml_edit::Item::as_table_like_mut)
-        {
-            apply_table_diff(child, current_child, next_child);
-            continue;
+            {
+                apply_table_diff(child, current_child, next_child);
+                continue;
+            }
         }
         document.insert(key, value_to_item(next_value));
     }
