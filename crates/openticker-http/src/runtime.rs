@@ -1,3 +1,4 @@
+use crate::config_watcher::ConfigWatcher;
 use crate::router::build_router;
 use crate::state::HttpState;
 use anyhow::Result;
@@ -35,8 +36,14 @@ pub async fn serve(bind_addr: &str, state: HttpState) -> Result<()> {
     info!(bind_addr, "starting HTTP API server");
     let polling_supervisor =
         RuntimePollingSupervisor::start(&state.runtime, Arc::clone(&state.data_plane));
+    let config_watcher = state.config_dir.clone().and_then(|config_dir| {
+        ConfigWatcher::start(state.clone(), config_dir, state.bots_dir.clone())
+    });
 
     let serve_result = axum::serve(listener, build_router(state)).await;
+    if let Some(config_watcher) = config_watcher {
+        config_watcher.shutdown().await;
+    }
     polling_supervisor.shutdown().await;
     if let Err(error) = &serve_result {
         error!(error = %error, "HTTP API server terminated with error");

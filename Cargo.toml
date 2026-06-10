@@ -40,6 +40,7 @@ chrono = { version = "0.4.42", features = ["serde"] }
 clap = { version = "4.5.50", features = ["derive"] }
 crossterm = "0.29.0"
 dotenvy = "0.15.7"
+notify = "8"
 ratatui = "0.29.0"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = "0.37.0"

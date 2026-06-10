@@ -1,4 +1,5 @@
 mod config_ops;
+mod config_watcher;
 mod config_write_handlers;
 mod constants;
 mod handlers;
