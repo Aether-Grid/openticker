@@ -1,6 +1,7 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { ConfigSaveResult, ConfigViolation } from '~/types/api'
 import type { FieldErrors } from '~/utils/configValidation'
+import { deepEqual } from '~/utils/deepEqual'
 
 export interface UseConfigFormOptions<T> {
   /** Loads the canonical entity from the server (reload-after-save source). */
