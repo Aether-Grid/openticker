@@ -8,8 +8,9 @@ use crate::handlers::unix_now_ms;
 use crate::state::HttpState;
 use openticker_config::{ConfigBundle, load_from_dir};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
+use tokio::sync::MutexGuard;
 use tracing::{info, warn};
 
 /// Maximum number of [`ConfigReloadStatus`] entries retained in the ring buffer.
@@ -75,6 +76,14 @@ pub(crate) enum ConfigApplyError {
     /// Rebuilding the runtime from the new bundle failed.
     RuntimeBuild(String),
 }
+
+/// Rebuilding the runtime from a new bundle failed.
+///
+/// Deliberately narrower than [`ConfigApplyError`] so the status recording in
+/// [`apply_bundle_and_record`] stays exhaustive: adding a new failure mode to
+/// [`apply_bundle`] is a compile error until it is recorded explicitly.
+#[derive(Debug)]
+pub(crate) struct RuntimeBuildError(pub(crate) String);
 
 /// Joins violation messages into a single human-readable summary.
 pub(crate) fn violation_summary(violations: &[ReloadViolation]) -> String {
@@ -268,17 +277,19 @@ fn collect_running_instance_violations(
 ///
 /// When `prebuilt_runtime` is `None`, the runtime is rebuilt from `bundle`;
 /// passing `Some` lets callers (e.g. config write endpoints) build the runtime
-/// before persisting anything to disk. The caller must hold
-/// `state.config_write_lock` for the duration of the call.
+/// before persisting anything to disk. The `_config_write_guard` parameter is
+/// a structural proof that the caller holds `state.config_write_lock` for the
+/// duration of the call.
 pub(crate) async fn apply_bundle(
     state: &HttpState,
     bundle: ConfigBundle,
     prebuilt_runtime: Option<openticker_runtime::Runtime>,
-) -> Result<(), ConfigApplyError> {
+    _config_write_guard: &MutexGuard<'_, ()>,
+) -> Result<(), RuntimeBuildError> {
     let reloaded_runtime = match prebuilt_runtime {
         Some(runtime) => runtime,
         None => openticker_runtime::Runtime::from_config_with_storage(&bundle)
-            .map_err(|error| ConfigApplyError::RuntimeBuild(error.to_string()))?,
+            .map_err(|error| RuntimeBuildError(error.to_string()))?,
     };
     let reloaded_query = reloaded_runtime.query_handle();
 
@@ -307,30 +318,57 @@ pub(crate) async fn apply_bundle(
     Ok(())
 }
 
+/// Applies `bundle` via [`apply_bundle`] and performs the shared bookkeeping:
+/// a failed apply is recorded as a `"failed"` status, a successful apply bumps
+/// `state.reload_generation` and records a `"reloaded"` status.
+///
+/// Returns the new generation on success. This is the single place where the
+/// bump-and-record dance lives, so reloads and config write endpoints cannot
+/// diverge.
+pub(crate) async fn apply_bundle_and_record(
+    state: &HttpState,
+    bundle: ConfigBundle,
+    prebuilt_runtime: Option<openticker_runtime::Runtime>,
+    trigger: ReloadTrigger,
+    config_write_guard: &MutexGuard<'_, ()>,
+) -> Result<u64, ConfigApplyError> {
+    if let Err(RuntimeBuildError(message)) =
+        apply_bundle(state, bundle, prebuilt_runtime, config_write_guard).await
+    {
+        warn!(error = %message, "config apply failed while rebuilding runtime");
+        record_status(
+            state,
+            trigger,
+            "failed",
+            Some(format!("config reload failed: {message}")),
+            Vec::new(),
+        )
+        .await;
+        return Err(ConfigApplyError::RuntimeBuild(message));
+    }
+
+    Ok(record_applied(state, trigger).await)
+}
+
 /// Reloads configuration from the managed config directory.
 ///
 /// Returns `Ok(true)` when a new bundle was applied, `Ok(false)` when the
 /// on-disk configuration is identical to the active bundle (no-op). Every
-/// outcome is recorded in `state.reload_status`; `state.reload_generation` is
-/// bumped only when a reload actually applied.
+/// reload outcome is recorded in `state.reload_status` (except
+/// [`ConfigApplyError::NotManaged`], which is a static deployment property);
+/// `state.reload_generation` is bumped only when a reload actually applied.
 pub(crate) async fn reload_from_disk(
     state: &HttpState,
     trigger: ReloadTrigger,
 ) -> Result<bool, ConfigApplyError> {
     let Some(config_dir) = state.config_dir.clone() else {
+        // Running without a managed config directory is a static deployment
+        // property, not a reload outcome, so it is not recorded in the ring.
         warn!("config reload requested but service is not using a managed config directory");
-        record_status(
-            state,
-            trigger,
-            "failed",
-            Some("service was started without a reloadable config directory".to_owned()),
-            Vec::new(),
-        )
-        .await;
         return Err(ConfigApplyError::NotManaged);
     };
 
-    let _write_guard = state.config_write_lock.lock().await;
+    let write_guard = state.config_write_lock.lock().await;
 
     let bundle = match load_from_dir(&config_dir) {
         Ok(bundle) => bundle,
@@ -394,20 +432,7 @@ pub(crate) async fn reload_from_disk(
         }
     }
 
-    if let Err(error) = apply_bundle(state, bundle, None).await {
-        let message = match &error {
-            ConfigApplyError::RuntimeBuild(message) => {
-                warn!(error = %message, "config reload failed while rebuilding runtime");
-                format!("config reload failed: {message}")
-            }
-            other => format!("config reload failed: {other:?}"),
-        };
-        record_status(state, trigger, "failed", Some(message), Vec::new()).await;
-        return Err(error);
-    }
-
-    let generation = state.reload_generation.fetch_add(1, Ordering::SeqCst) + 1;
-    record_status_with_generation(state, trigger, "reloaded", None, Vec::new(), generation).await;
+    let generation = apply_bundle_and_record(state, bundle, None, trigger, &write_guard).await?;
 
     let instances = {
         let runtime = state.runtime.read().await;
@@ -424,6 +449,9 @@ fn bundles_equal(current: &ConfigBundle, next: &ConfigBundle) -> bool {
     }
 }
 
+/// Records a non-applying reload outcome, reading the current generation
+/// inside the `reload_status` critical section so the entry and the
+/// generation it carries cannot skew.
 async fn record_status(
     state: &HttpState,
     trigger: ReloadTrigger,
@@ -431,27 +459,42 @@ async fn record_status(
     error: Option<String>,
     violations: Vec<ReloadViolation>,
 ) {
+    let mut history = state.reload_status.write().await;
     let generation = state.reload_generation.load(Ordering::SeqCst);
-    record_status_with_generation(state, trigger, outcome, error, violations, generation).await;
+    push_status(
+        &mut history,
+        ConfigReloadStatus {
+            at_ms: unix_now_ms(),
+            trigger: trigger.as_str(),
+            outcome,
+            error,
+            violations,
+            generation,
+        },
+    );
 }
 
-async fn record_status_with_generation(
-    state: &HttpState,
-    trigger: ReloadTrigger,
-    outcome: &'static str,
-    error: Option<String>,
-    violations: Vec<ReloadViolation>,
-    generation: u64,
-) {
-    let entry = ConfigReloadStatus {
-        at_ms: unix_now_ms(),
-        trigger: trigger.as_str(),
-        outcome,
-        error,
-        violations,
-        generation,
-    };
+/// Bumps `state.reload_generation` and records the matching `"reloaded"`
+/// entry inside a single `reload_status` critical section, so a reader
+/// holding the history lock never observes a generation without its entry.
+async fn record_applied(state: &HttpState, trigger: ReloadTrigger) -> u64 {
     let mut history = state.reload_status.write().await;
+    let generation = state.reload_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    push_status(
+        &mut history,
+        ConfigReloadStatus {
+            at_ms: unix_now_ms(),
+            trigger: trigger.as_str(),
+            outcome: "reloaded",
+            error: None,
+            violations: Vec::new(),
+            generation,
+        },
+    );
+    generation
+}
+
+fn push_status(history: &mut VecDeque<ConfigReloadStatus>, entry: ConfigReloadStatus) {
     while history.len() >= RELOAD_STATUS_HISTORY_LIMIT {
         history.pop_front();
     }

@@ -1689,7 +1689,7 @@ mod tests {
 
         let (second_status, second_body) = post_reload(&app).await;
         assert_eq!(second_status, StatusCode::OK);
-        assert_eq!(second_body["status"], "reloaded");
+        assert_eq!(second_body["status"], "no_change");
         assert_eq!(second_body["reloaded"], false);
 
         let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
@@ -1777,6 +1777,123 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body["violations"][0]["code"], "bot_dir_changed");
         assert_eq!(body["violations"][0]["scope"], "global");
+    }
+
+    #[tokio::test]
+    async fn config_reload_status_history_truncates_to_limit_newest_first() {
+        let config_dir = create_managed_config_dir("reload-status-cap");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        let limit = crate::config_ops::RELOAD_STATUS_HISTORY_LIMIT;
+        let cycles = u64::try_from(limit).unwrap() + 5;
+        for cycle in 0..cycles {
+            write_managed_instance(&config_dir, "alpaca", "1m", Some(true), Some(200 + cycle));
+            let (status, body) = post_reload(&app).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body["reloaded"], true,
+                "cycle {cycle} should apply a changed config"
+            );
+        }
+
+        let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        assert_eq!(reload_status["generation"], cycles);
+        let history = reload_status["history"].as_array().unwrap();
+        assert_eq!(history.len(), limit);
+        assert_eq!(history[0]["generation"], cycles);
+        assert_eq!(
+            history[limit - 1]["generation"],
+            cycles - u64::try_from(limit).unwrap() + 1
+        );
+        assert!(history.iter().all(|entry| entry["outcome"] == "reloaded"));
+    }
+
+    #[tokio::test]
+    async fn config_reload_records_failed_outcome_for_corrupt_toml() {
+        let config_dir = create_managed_config_dir("reload-corrupt-toml");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        fs::write(
+            config_dir.join("openticker.toml"),
+            "this is not [valid toml",
+        )
+        .expect("corrupt global config should be written");
+
+        let (status, body) = post_reload(&app).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("config reload failed")
+        );
+
+        let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        assert_eq!(reload_status["generation"], 0);
+        assert_eq!(reload_status["last"]["outcome"], "failed");
+        assert_eq!(reload_status["last"]["trigger"], "manual_api");
+        assert!(reload_status["last"]["error"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn concurrent_config_reloads_keep_generation_and_history_coherent() {
+        let config_dir = create_managed_config_dir("reload-concurrent");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        write_managed_instance(&config_dir, "alpaca", "1m", Some(true), Some(250));
+
+        let responses = tokio::join!(
+            post_reload(&app),
+            post_reload(&app),
+            post_reload(&app),
+            post_reload(&app)
+        );
+        let responses = [responses.0, responses.1, responses.2, responses.3];
+
+        let mut applied_count = 0u64;
+        for (status, body) in &responses {
+            assert!(status.is_success(), "concurrent reload returned {status}");
+            if body["reloaded"] == true {
+                applied_count += 1;
+            }
+        }
+        assert!(applied_count >= 1);
+
+        let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        let final_generation = reload_status["generation"].as_u64().unwrap();
+        assert_eq!(final_generation, applied_count);
+
+        let history = reload_status["history"].as_array().unwrap();
+        assert_eq!(history.len(), responses.len());
+        let reloaded_entries = history
+            .iter()
+            .filter(|entry| entry["outcome"] == "reloaded")
+            .count();
+        assert_eq!(u64::try_from(reloaded_entries).unwrap(), applied_count);
+        assert!(
+            reloaded_entries <= 1,
+            "a single distinct config state should apply at most once"
+        );
+        assert!(
+            history
+                .iter()
+                .all(|entry| entry["generation"].as_u64().unwrap() <= final_generation)
+        );
     }
 
     async fn post_reload(app: &axum::Router) -> (StatusCode, serde_json::Value) {

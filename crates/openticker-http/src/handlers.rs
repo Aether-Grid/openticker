@@ -577,7 +577,7 @@ pub(crate) async fn config_reload_handler(State(state): State<HttpState>) -> imp
             (
                 StatusCode::OK,
                 Json(json!({
-                    "status": "reloaded",
+                    "status": if reloaded { "reloaded" } else { "no_change" },
                     "reloaded": reloaded,
                     "service": runtime.status(),
                 })),
@@ -619,10 +619,12 @@ pub(crate) async fn config_reload_handler(State(state): State<HttpState>) -> imp
 pub(crate) async fn config_reload_status_handler(
     State(state): State<HttpState>,
 ) -> Json<serde_json::Value> {
+    let history = state.reload_status.read().await;
+    // Read the generation while holding the history lock so the response can
+    // never pair a bumped generation with a history that lacks its entry.
     let generation = state
         .reload_generation
         .load(std::sync::atomic::Ordering::SeqCst);
-    let history = state.reload_status.read().await;
     let newest_first = history.iter().rev().cloned().collect::<Vec<_>>();
     Json(json!({
         "generation": generation,

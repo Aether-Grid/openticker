@@ -78,6 +78,11 @@ impl HttpState {
     pub fn with_config(runtime: Runtime, config_dir: PathBuf, bundle: ConfigBundle) -> Self {
         let query = runtime.query_handle();
         let data_plane = Arc::new(DataPlane::new(runtime.effective_streams_for_dataplane()));
+        // Best-effort: callers pointing at a partial or synthetic config dir
+        // still get a usable state with `bots_dir: None`.
+        let bots_dir = openticker_config::load_sources_from_dir(&config_dir)
+            .ok()
+            .map(|sources| sources.bots_dir);
         Self {
             runtime: Arc::new(RwLock::new(runtime)),
             query: Arc::new(RwLock::new(query)),
@@ -87,7 +92,7 @@ impl HttpState {
             config_write_lock: Arc::new(Mutex::new(())),
             reload_status: Arc::new(RwLock::new(VecDeque::new())),
             reload_generation: Arc::new(AtomicU64::new(0)),
-            bots_dir: None,
+            bots_dir,
         }
     }
 }
