@@ -1,3 +1,4 @@
+use crate::config_ops::{ConfigApplyError, ReloadTrigger, reload_from_disk, violation_summary};
 use crate::constants::{
     BOT_SNAPSHOT_ORDERS_LIMIT, BOT_SNAPSHOT_POSITIONS_LIMIT, BOT_SNAPSHOT_TIMELINE_LIMIT,
     DASHBOARD_HTML, DASHBOARD_SNAPSHOT_DEFAULT_LIMIT, DEFAULT_STREAM_BARS_LIMIT,
@@ -12,7 +13,6 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use openticker_config::{ConfigBundle, load_from_dir};
 use openticker_connectors::connector_matrix;
 use openticker_core::{IndicatorSignal, OhlcvBar, SignalPhase, Timeframe};
 use openticker_data::NormalizedTrade;
@@ -22,13 +22,13 @@ use openticker_runtime::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
-fn unix_now_ms() -> i64 {
+pub(crate) fn unix_now_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -571,215 +571,64 @@ pub(crate) async fn connectors_status_handler(
 }
 
 pub(crate) async fn config_reload_handler(State(state): State<HttpState>) -> impl IntoResponse {
-    let Some(config_dir) = state.config_dir.as_ref() else {
-        warn!("config reload requested but service is not using a managed config directory");
-        return (
+    match reload_from_disk(&state, ReloadTrigger::ManualApi).await {
+        Ok(reloaded) => {
+            let runtime = state.runtime.read().await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "reloaded",
+                    "reloaded": reloaded,
+                    "service": runtime.status(),
+                })),
+            )
+                .into_response()
+        }
+        Err(ConfigApplyError::NotManaged) => (
             StatusCode::NOT_IMPLEMENTED,
             Json(ErrorResponse {
                 error: "service was started without a reloadable config directory".to_owned(),
             }),
         )
-            .into_response();
-    };
-
-    let bundle = match load_from_dir(config_dir) {
-        Ok(bundle) => bundle,
-        Err(error) => {
-            warn!(error = %error, "config reload failed while loading files");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("config reload failed: {error}"),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    let running_instance_ids = {
-        let runtime = state.runtime.read().await;
-        runtime
-            .list_instances()
-            .into_iter()
-            .filter(|instance| {
-                matches!(
-                    instance.state,
-                    openticker_runtime::InstanceRuntimeState::Running
-                )
-            })
-            .map(|instance| instance.id)
-            .collect::<HashSet<_>>()
-    };
-
-    {
-        let current_bundle = state.config_bundle.read().await;
-        if let Some(current) = current_bundle.as_ref()
-            && let Err(error) = validate_reload_change_set(current, &bundle, &running_instance_ids)
-        {
-            warn!(error, "config reload rejected by change-set validation");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("config reload failed: {error}"),
-                }),
-            )
-                .into_response();
-        }
+            .into_response(),
+        Err(ConfigApplyError::Load(error)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: format!("config reload failed: {error}"),
+            }),
+        )
+            .into_response(),
+        Err(ConfigApplyError::RuntimeBuild(error)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: format!("config reload failed: {error}"),
+            }),
+        )
+            .into_response(),
+        Err(ConfigApplyError::ChangeSet(violations)) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!("config reload failed: {}", violation_summary(&violations)),
+                "violations": violations,
+            })),
+        )
+            .into_response(),
     }
-
-    let reloaded_runtime = match openticker_runtime::Runtime::from_config_with_storage(&bundle) {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            warn!(error = %error, "config reload failed while rebuilding runtime");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("config reload failed: {error}"),
-                }),
-            )
-                .into_response();
-        }
-    };
-    let reloaded_query = reloaded_runtime.query_handle();
-
-    {
-        let mut runtime = state.runtime.write().await;
-        *runtime = reloaded_runtime;
-    }
-
-    {
-        let mut query = state.query.write().await;
-        *query = reloaded_query;
-    }
-
-    {
-        let runtime = state.runtime.read().await;
-        state
-            .data_plane
-            .replace_streams(runtime.effective_streams_for_dataplane());
-    }
-
-    {
-        let mut config_bundle = state.config_bundle.write().await;
-        *config_bundle = Some(bundle.clone());
-    }
-
-    let runtime = state.runtime.read().await;
-    info!(
-        instances = runtime.list_instances().len(),
-        "configuration reloaded successfully"
-    );
-    (
-        StatusCode::OK,
-        Json(json!({
-            "status": "reloaded",
-            "service": runtime.status(),
-        })),
-    )
-        .into_response()
 }
 
-fn validate_reload_change_set(
-    current: &ConfigBundle,
-    next: &ConfigBundle,
-    running_instance_ids: &HashSet<String>,
-) -> Result<(), String> {
-    if current.global.storage.kind != next.global.storage.kind
-        || current.global.storage.path != next.global.storage.path
-    {
-        return Err(
-            "reload requires restart because storage backend configuration changed".to_owned(),
-        );
-    }
-
-    let current_accounts = current
-        .accounts
-        .iter()
-        .map(|account| (account.id.as_str(), account))
-        .collect::<HashMap<_, _>>();
-    let next_accounts = next
-        .accounts
-        .iter()
-        .map(|account| (account.id.as_str(), account))
-        .collect::<HashMap<_, _>>();
-
-    let current_account_ids = current_accounts.keys().copied().collect::<HashSet<_>>();
-    let next_account_ids = next_accounts.keys().copied().collect::<HashSet<_>>();
-    if current_account_ids != next_account_ids {
-        return Err("reload requires restart because account set changed".to_owned());
-    }
-
-    for (account_id, old_account) in &current_accounts {
-        let new_account = next_accounts
-            .get(account_id)
-            .ok_or_else(|| format!("account `{account_id}` is missing in reloaded config"))?;
-
-        if old_account.kind != new_account.kind
-            || old_account.mode != new_account.mode
-            || old_account.use_demo_mode != new_account.use_demo_mode
-            || old_account.reconciliation_remote_snapshot
-                != new_account.reconciliation_remote_snapshot
-            || old_account.execution_remote_submission != new_account.execution_remote_submission
-            || old_account.reconciliation_base_url != new_account.reconciliation_base_url
-        {
-            return Err(format!(
-                "reload requires restart because connector settings changed for account `{account_id}`"
-            ));
-        }
-
-        if old_account.api_key_env != new_account.api_key_env
-            || old_account.api_secret_env != new_account.api_secret_env
-            || old_account.passphrase_env != new_account.passphrase_env
-        {
-            return Err(format!(
-                "reload requires restart because credential references changed for account `{account_id}`"
-            ));
-        }
-    }
-
-    let current_instances = current
-        .instances
-        .iter()
-        .map(|instance| (instance.id.as_str(), instance))
-        .collect::<HashMap<_, _>>();
-    let next_instances = next
-        .instances
-        .iter()
-        .map(|instance| (instance.id.as_str(), instance))
-        .collect::<HashMap<_, _>>();
-
-    for instance_id in running_instance_ids {
-        let old_instance = current_instances.get(instance_id.as_str()).ok_or_else(|| {
-            format!("running instance `{instance_id}` is missing in current config bundle")
-        })?;
-        let new_instance = next_instances.get(instance_id.as_str()).ok_or_else(|| {
-            format!("reload requires restart because running instance `{instance_id}` was removed")
-        })?;
-
-        if old_instance.timeframe != new_instance.timeframe {
-            return Err(format!(
-                "reload requires restart because timeframe changed for running instance `{instance_id}`"
-            ));
-        }
-
-        if old_instance.symbols != new_instance.symbols {
-            return Err(format!(
-                "reload requires reconciliation because symbols changed for running instance `{instance_id}`"
-            ));
-        }
-
-        if old_instance.account != new_instance.account
-            || old_instance.data_connector != new_instance.data_connector
-            || old_instance.execution_connector != new_instance.execution_connector
-            || old_instance.market != new_instance.market
-        {
-            return Err(format!(
-                "reload requires restart because connector or account bindings changed for running instance `{instance_id}`"
-            ));
-        }
-    }
-
-    Ok(())
+pub(crate) async fn config_reload_status_handler(
+    State(state): State<HttpState>,
+) -> Json<serde_json::Value> {
+    let generation = state
+        .reload_generation
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let history = state.reload_status.read().await;
+    let newest_first = history.iter().rev().cloned().collect::<Vec<_>>();
+    Json(json!({
+        "generation": generation,
+        "last": newest_first.first(),
+        "history": newest_first,
+    }))
 }
 
 fn stream_status_map(streams: Vec<StreamStatus>) -> HashMap<String, StreamStatus> {

@@ -26,6 +26,7 @@ pub const LEDGER_BOTS_PATH: &str = "/v1/ledger/bots";
 pub const LEDGER_LANES_PATH: &str = "/v1/ledger/lanes";
 pub const DASHBOARD_LEDGER_PATH: &str = "/api/ledger";
 pub const CONFIG_RELOAD_PATH: &str = "/v1/config/reload";
+pub const CONFIG_RELOAD_STATUS_PATH: &str = "/v1/config/reload-status";
 pub const CONFIG_EFFECTIVE_PATH: &str = "/v1/config/effective";
 pub const CONNECTORS_MATRIX_PATH: &str = "/v1/connectors/matrix";
 pub const CONNECTORS_STATUS_PATH: &str = "/v1/connectors/status";
@@ -199,6 +200,11 @@ pub(crate) const HTTP_SURFACE_ROUTES: &[HttpRouteDescriptor] = &[
         path: CONFIG_RELOAD_PATH,
         method: "post",
         operation_id: "config_reload_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_RELOAD_STATUS_PATH,
+        method: "get",
+        operation_id: "config_reload_status_handler",
     },
     HttpRouteDescriptor {
         path: CONFIG_EFFECTIVE_PATH,

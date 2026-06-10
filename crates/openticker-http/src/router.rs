@@ -3,31 +3,31 @@ use crate::constants::{
     BOT_LANES_PATH, BOT_MANUAL_SIGNAL_PATH, BOT_PATH, BOT_PAUSE_PATH, BOT_RECONCILE_PATH,
     BOT_RECONCILIATION_REPORT_PATH, BOT_RESUME_PATH, BOT_SIMULATE_BAR_PATH,
     BOT_SIMULATE_TRADE_PATH, BOT_SNAPSHOT_PATH, BOT_START_PATH, BOT_STOP_PATH, BOT_TICK_PATH,
-    BOTS_PATH, CONFIG_EFFECTIVE_PATH, CONFIG_RELOAD_PATH, CONNECTORS_MATRIX_PATH,
-    CONNECTORS_STATUS_PATH, DASHBOARD_ACTIVITY_PATH, DASHBOARD_BOT_DETAIL_PATH,
-    DASHBOARD_BOTS_PATH, DASHBOARD_CONFIG_PATH, DASHBOARD_CONNECTORS_PATH,
-    DASHBOARD_CYCLE_DETAIL_PATH, DASHBOARD_CYCLES_PATH, DASHBOARD_FEED_DETAIL_PATH,
-    DASHBOARD_FEEDS_PATH, DASHBOARD_LEDGER_PATH, DASHBOARD_PATH, DASHBOARD_PORTFOLIO_PATH,
-    DASHBOARD_PROVIDERS_PATH, DASHBOARD_SNAPSHOT_PATH, DATA_STREAMS_PATH, EVENTS_PATH, FILLS_PATH,
-    HEALTH_PATH, INTENTS_PATH, LEDGER_ACCOUNTS_PATH, LEDGER_BOTS_PATH, LEDGER_LANES_PATH,
-    LEDGER_PATH, METRICS_PATH, OPENAPI_PATH, ORDERS_PATH, POSITIONS_PATH, READY_PATH,
-    RECONCILIATIONS_PATH, RISK_DECISIONS_PATH, SERVICE_STATUS_PATH, SIGNALS_PATH,
+    BOTS_PATH, CONFIG_EFFECTIVE_PATH, CONFIG_RELOAD_PATH, CONFIG_RELOAD_STATUS_PATH,
+    CONNECTORS_MATRIX_PATH, CONNECTORS_STATUS_PATH, DASHBOARD_ACTIVITY_PATH,
+    DASHBOARD_BOT_DETAIL_PATH, DASHBOARD_BOTS_PATH, DASHBOARD_CONFIG_PATH,
+    DASHBOARD_CONNECTORS_PATH, DASHBOARD_CYCLE_DETAIL_PATH, DASHBOARD_CYCLES_PATH,
+    DASHBOARD_FEED_DETAIL_PATH, DASHBOARD_FEEDS_PATH, DASHBOARD_LEDGER_PATH, DASHBOARD_PATH,
+    DASHBOARD_PORTFOLIO_PATH, DASHBOARD_PROVIDERS_PATH, DASHBOARD_SNAPSHOT_PATH, DATA_STREAMS_PATH,
+    EVENTS_PATH, FILLS_PATH, HEALTH_PATH, INTENTS_PATH, LEDGER_ACCOUNTS_PATH, LEDGER_BOTS_PATH,
+    LEDGER_LANES_PATH, LEDGER_PATH, METRICS_PATH, OPENAPI_PATH, ORDERS_PATH, POSITIONS_PATH,
+    READY_PATH, RECONCILIATIONS_PATH, RISK_DECISIONS_PATH, SERVICE_STATUS_PATH, SIGNALS_PATH,
 };
 use crate::handlers::{
     bot_reconciliation_report_handler, bot_snapshot_handler, cancel_bot_open_orders_handler,
     close_bot_positions_handler, config_effective_handler, config_reload_handler,
-    connectors_matrix_handler, connectors_status_handler, dashboard_handler,
-    dashboard_snapshot_handler, disable_kill_switch_handler, enable_kill_switch_handler,
-    favicon_handler, get_bot_cycle_handler, get_bot_handler, get_bot_lanes_handler, health_handler,
-    ledger_accounts_handler, ledger_bots_handler, ledger_handler, ledger_lanes_handler,
-    list_bot_cycles_handler, list_bots_handler, list_data_stream_bars_handler,
-    list_data_stream_history_handler, list_data_streams_handler, list_events_handler,
-    list_fills_handler, list_intents_handler, list_orders_handler, list_positions_handler,
-    list_reconciliations_handler, list_risk_decisions_handler, list_signals_handler,
-    manual_bot_signal_handler, metrics_handler, openapi_handler, pause_bot_handler, ready_handler,
-    reconcile_bot_handler, resume_bot_handler, service_status_handler, simulate_bot_bar_handler,
-    simulate_bot_trade_handler, start_bot_handler, stop_bot_handler, tick_bot_handler,
-    ui_asset_handler,
+    config_reload_status_handler, connectors_matrix_handler, connectors_status_handler,
+    dashboard_handler, dashboard_snapshot_handler, disable_kill_switch_handler,
+    enable_kill_switch_handler, favicon_handler, get_bot_cycle_handler, get_bot_handler,
+    get_bot_lanes_handler, health_handler, ledger_accounts_handler, ledger_bots_handler,
+    ledger_handler, ledger_lanes_handler, list_bot_cycles_handler, list_bots_handler,
+    list_data_stream_bars_handler, list_data_stream_history_handler, list_data_streams_handler,
+    list_events_handler, list_fills_handler, list_intents_handler, list_orders_handler,
+    list_positions_handler, list_reconciliations_handler, list_risk_decisions_handler,
+    list_signals_handler, manual_bot_signal_handler, metrics_handler, openapi_handler,
+    pause_bot_handler, ready_handler, reconcile_bot_handler, resume_bot_handler,
+    service_status_handler, simulate_bot_bar_handler, simulate_bot_trade_handler,
+    start_bot_handler, stop_bot_handler, tick_bot_handler, ui_asset_handler,
 };
 use crate::state::HttpState;
 use axum::Router;
@@ -74,6 +74,7 @@ pub fn build_router(state: HttpState) -> Router {
         .route(LEDGER_LANES_PATH, get(ledger_lanes_handler))
         .route(DASHBOARD_LEDGER_PATH, get(ledger_handler))
         .route(CONFIG_RELOAD_PATH, post(config_reload_handler))
+        .route(CONFIG_RELOAD_STATUS_PATH, get(config_reload_status_handler))
         .route(CONFIG_EFFECTIVE_PATH, get(config_effective_handler))
         .route(CONNECTORS_MATRIX_PATH, get(connectors_matrix_handler))
         .route(CONNECTORS_STATUS_PATH, get(connectors_status_handler))

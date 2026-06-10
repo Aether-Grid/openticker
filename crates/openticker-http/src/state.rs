@@ -1,3 +1,4 @@
+use crate::config_ops::ConfigReloadStatus;
 use openticker_config::ConfigBundle;
 use openticker_core::Timeframe;
 use openticker_dataplane::{DataPlane, StreamStatus};
@@ -7,9 +8,11 @@ use openticker_runtime::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::atomic::AtomicU64;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct HttpState {
@@ -18,6 +21,16 @@ pub struct HttpState {
     pub(crate) config_bundle: Arc<RwLock<Option<ConfigBundle>>>,
     pub(crate) config_dir: Option<PathBuf>,
     pub(crate) data_plane: Arc<DataPlane>,
+    /// Serializes config reload/apply operations. Always acquire this BEFORE
+    /// any `runtime`/`query`/`config_bundle` write locks.
+    pub(crate) config_write_lock: Arc<Mutex<()>>,
+    /// Ring buffer of the most recent reload attempts (newest at the back).
+    pub(crate) reload_status: Arc<RwLock<VecDeque<ConfigReloadStatus>>>,
+    /// Incremented every time a reload actually applies a new bundle.
+    pub(crate) reload_generation: Arc<AtomicU64>,
+    /// Resolved bots directory backing the managed config, when known.
+    #[allow(dead_code)]
+    pub(crate) bots_dir: Option<PathBuf>,
 }
 
 impl HttpState {
@@ -31,6 +44,10 @@ impl HttpState {
             config_bundle: Arc::new(RwLock::new(None)),
             config_dir: None,
             data_plane,
+            config_write_lock: Arc::new(Mutex::new(())),
+            reload_status: Arc::new(RwLock::new(VecDeque::new())),
+            reload_generation: Arc::new(AtomicU64::new(0)),
+            bots_dir: None,
         }
     }
 
@@ -50,6 +67,10 @@ impl HttpState {
             config_bundle: Arc::new(RwLock::new(None)),
             config_dir: None,
             data_plane,
+            config_write_lock: Arc::new(Mutex::new(())),
+            reload_status: Arc::new(RwLock::new(VecDeque::new())),
+            reload_generation: Arc::new(AtomicU64::new(0)),
+            bots_dir: None,
         }
     }
 
@@ -63,6 +84,10 @@ impl HttpState {
             config_bundle: Arc::new(RwLock::new(Some(bundle))),
             config_dir: Some(config_dir),
             data_plane,
+            config_write_lock: Arc::new(Mutex::new(())),
+            reload_status: Arc::new(RwLock::new(VecDeque::new())),
+            reload_generation: Arc::new(AtomicU64::new(0)),
+            bots_dir: None,
         }
     }
 }

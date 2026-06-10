@@ -1,3 +1,4 @@
+mod config_ops;
 mod constants;
 mod handlers;
 mod router;
@@ -9,14 +10,15 @@ pub use constants::{
     BOT_LANES_PATH, BOT_MANUAL_SIGNAL_PATH, BOT_PATH, BOT_PAUSE_PATH, BOT_RECONCILE_PATH,
     BOT_RECONCILIATION_REPORT_PATH, BOT_RESUME_PATH, BOT_SIMULATE_BAR_PATH,
     BOT_SIMULATE_TRADE_PATH, BOT_SNAPSHOT_PATH, BOT_START_PATH, BOT_STOP_PATH, BOT_TICK_PATH,
-    BOTS_PATH, CONFIG_EFFECTIVE_PATH, CONFIG_RELOAD_PATH, CONNECTORS_MATRIX_PATH,
-    CONNECTORS_STATUS_PATH, DASHBOARD_ACTIVITY_PATH, DASHBOARD_BOT_DETAIL_PATH,
-    DASHBOARD_BOTS_PATH, DASHBOARD_CONFIG_PATH, DASHBOARD_CONNECTORS_PATH, DASHBOARD_CYCLES_PATH,
-    DASHBOARD_FEED_DETAIL_PATH, DASHBOARD_FEEDS_PATH, DASHBOARD_LEDGER_PATH, DASHBOARD_PATH,
-    DASHBOARD_PORTFOLIO_PATH, DASHBOARD_PROVIDERS_PATH, DASHBOARD_SNAPSHOT_PATH, DATA_STREAMS_PATH,
-    EVENTS_PATH, FILLS_PATH, HEALTH_PATH, INTENTS_PATH, LEDGER_ACCOUNTS_PATH, LEDGER_BOTS_PATH,
-    LEDGER_LANES_PATH, LEDGER_PATH, METRICS_PATH, OPENAPI_PATH, ORDERS_PATH, POSITIONS_PATH,
-    READY_PATH, RECONCILIATIONS_PATH, RISK_DECISIONS_PATH, SERVICE_STATUS_PATH, SIGNALS_PATH,
+    BOTS_PATH, CONFIG_EFFECTIVE_PATH, CONFIG_RELOAD_PATH, CONFIG_RELOAD_STATUS_PATH,
+    CONNECTORS_MATRIX_PATH, CONNECTORS_STATUS_PATH, DASHBOARD_ACTIVITY_PATH,
+    DASHBOARD_BOT_DETAIL_PATH, DASHBOARD_BOTS_PATH, DASHBOARD_CONFIG_PATH,
+    DASHBOARD_CONNECTORS_PATH, DASHBOARD_CYCLES_PATH, DASHBOARD_FEED_DETAIL_PATH,
+    DASHBOARD_FEEDS_PATH, DASHBOARD_LEDGER_PATH, DASHBOARD_PATH, DASHBOARD_PORTFOLIO_PATH,
+    DASHBOARD_PROVIDERS_PATH, DASHBOARD_SNAPSHOT_PATH, DATA_STREAMS_PATH, EVENTS_PATH, FILLS_PATH,
+    HEALTH_PATH, INTENTS_PATH, LEDGER_ACCOUNTS_PATH, LEDGER_BOTS_PATH, LEDGER_LANES_PATH,
+    LEDGER_PATH, METRICS_PATH, OPENAPI_PATH, ORDERS_PATH, POSITIONS_PATH, READY_PATH,
+    RECONCILIATIONS_PATH, RISK_DECISIONS_PATH, SERVICE_STATUS_PATH, SIGNALS_PATH,
 };
 pub use router::build_router;
 pub use runtime::{load_http_state, serve};
@@ -149,7 +151,11 @@ mod tests {
             .expect("ui/.output/public/_nuxt must exist — run `pnpm build` in ui/")
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .find(|name| name.ends_with(".js"))
+            .find(|name| {
+                std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
+            })
             .expect("at least one .js asset should be emitted by the Nuxt build");
 
         let app = build_router(fixture_state());
@@ -1439,7 +1445,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
@@ -1470,11 +1476,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("storage"));
+        assert_eq!(json["violations"][0]["code"], "storage_changed");
+        assert_eq!(json["violations"][0]["scope"], "global");
     }
 
     #[tokio::test]
@@ -1501,11 +1509,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("credential references"));
+        assert_eq!(json["violations"][0]["code"], "credentials_changed");
+        assert_eq!(json["violations"][0]["scope"], "account:alpaca-paper");
     }
 
     #[tokio::test]
@@ -1537,11 +1547,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("connector settings"));
+        assert_eq!(json["violations"][0]["code"], "account_settings_changed");
     }
 
     #[tokio::test]
@@ -1568,11 +1579,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("timeframe"));
+        assert_eq!(json["violations"][0]["code"], "timeframe_changed_running");
+        assert_eq!(json["violations"][0]["scope"], "bot:aapl");
     }
 
     #[tokio::test]
@@ -1599,11 +1612,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("symbols changed"));
+        assert_eq!(json["violations"][0]["code"], "symbols_changed_running");
     }
 
     #[tokio::test]
@@ -1631,11 +1645,168 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("running instance `aapl` was removed"));
+        assert_eq!(json["violations"][0]["code"], "running_instance_removed");
+    }
+
+    #[tokio::test]
+    async fn config_reload_status_starts_with_generation_zero_and_empty_history() {
+        let app = build_router(fixture_state());
+
+        let json = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        assert_eq!(json["generation"], 0);
+        assert!(json["last"].is_null());
+        assert_eq!(json["history"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[tokio::test]
+    async fn config_reload_status_tracks_reloaded_and_no_change_outcomes() {
+        let config_dir = create_managed_config_dir("reload-status-track");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        write_managed_instance(&config_dir, "alpaca", "1m", Some(true), Some(250));
+
+        let (status, body) = post_reload(&app).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "reloaded");
+        assert_eq!(body["reloaded"], true);
+
+        let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        assert_eq!(reload_status["generation"], 1);
+        assert_eq!(reload_status["last"]["outcome"], "reloaded");
+        assert_eq!(reload_status["last"]["trigger"], "manual_api");
+        assert_eq!(reload_status["last"]["generation"], 1);
+        assert!(reload_status["last"]["error"].is_null());
+
+        let (second_status, second_body) = post_reload(&app).await;
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(second_body["status"], "reloaded");
+        assert_eq!(second_body["reloaded"], false);
+
+        let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        assert_eq!(reload_status["generation"], 1);
+        assert_eq!(reload_status["last"]["outcome"], "no_change");
+        assert_eq!(reload_status["last"]["trigger"], "manual_api");
+        assert_eq!(reload_status["last"]["generation"], 1);
+        assert_eq!(reload_status["history"].as_array().map(Vec::len), Some(2));
+        assert_eq!(reload_status["history"][0]["outcome"], "no_change");
+        assert_eq!(reload_status["history"][1]["outcome"], "reloaded");
+    }
+
+    #[tokio::test]
+    async fn config_reload_rejection_records_structured_violations_in_status() {
+        let config_dir = create_managed_config_dir("reload-status-rejected");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        let changed_storage_path = config_dir.join("runtime-next.db");
+        write_managed_config(&config_dir, &changed_storage_path, "alpaca", "1m");
+
+        let (status, body) = post_reload(&app).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(violation_codes(&body).contains(&"storage_changed".to_owned()));
+
+        let reload_status = get_json(&app, CONFIG_RELOAD_STATUS_PATH).await;
+        assert_eq!(reload_status["generation"], 0);
+        assert_eq!(reload_status["last"]["outcome"], "rejected");
+        assert_eq!(reload_status["last"]["trigger"], "manual_api");
+        assert_eq!(
+            reload_status["last"]["violations"][0]["code"],
+            "storage_changed"
+        );
+    }
+
+    #[tokio::test]
+    async fn config_reload_collects_all_change_set_violations() {
+        let config_dir = create_managed_config_dir("reload-multi-violation");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        let changed_storage_path = config_dir.join("runtime-next.db");
+        write_managed_config(&config_dir, &changed_storage_path, "alpaca", "1m");
+        let alternate_secret_env = existing_env_var_name_except("PATH");
+        write_managed_account(&config_dir, "PATH", alternate_secret_env);
+
+        let (status, body) = post_reload(&app).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let codes = violation_codes(&body);
+        assert!(codes.contains(&"storage_changed".to_owned()), "{codes:?}");
+        assert!(
+            codes.contains(&"credentials_changed".to_owned()),
+            "{codes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn config_reload_rejects_bot_dir_change() {
+        let config_dir = create_managed_config_dir("reload-bot-dir-change");
+        let storage_path = config_dir.join("runtime.db");
+        write_managed_config(&config_dir, &storage_path, "alpaca", "1m");
+
+        let bundle = load_from_dir(&config_dir).unwrap();
+        let runtime = Runtime::from_config_with_storage(&bundle).unwrap();
+        let app = build_router(HttpState::with_config(runtime, config_dir.clone(), bundle));
+
+        // Same instance files in a different directory; only service.bot_dir changes.
+        fs::create_dir_all(config_dir.join("bots-next")).expect("bots-next dir should be created");
+        fs::copy(
+            config_dir.join("bots").join("aapl.toml"),
+            config_dir.join("bots-next").join("aapl.toml"),
+        )
+        .expect("instance config should be copied");
+        write_managed_global(&config_dir, &storage_path, "./bots-next");
+
+        let (status, body) = post_reload(&app).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["violations"][0]["code"], "bot_dir_changed");
+        assert_eq!(body["violations"][0]["scope"], "global");
+    }
+
+    async fn post_reload(app: &axum::Router) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(CONFIG_RELOAD_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json = serde_json::from_slice(&body).unwrap();
+        (status, json)
+    }
+
+    fn violation_codes(body: &serde_json::Value) -> Vec<String> {
+        body["violations"]
+            .as_array()
+            .map(|violations| {
+                violations
+                    .iter()
+                    .filter_map(|violation| violation["code"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     #[tokio::test]
@@ -1995,20 +2166,24 @@ mod tests {
         root
     }
 
+    fn write_managed_global(config_dir: &Path, storage_path: &Path, bot_dir: &str) {
+        fs::write(
+            config_dir.join("openticker.toml"),
+            format!(
+                "[service]\nenvironment = \"test\"\ndata_dir = \"./var\"\nbot_dir = \"{bot_dir}\"\n\n[http]\nenabled = true\nbind = \"127.0.0.1:8080\"\nrequest_log = true\nopenapi_enabled = true\nopenapi_path = \"/openapi.json\"\n\n[storage]\nkind = \"sqlite\"\npath = \"{}\"\nbusy_timeout_ms = 5000\n\n[observability]\nlog_level = \"info\"\nmetrics_enabled = true\nmetrics_path = \"/metrics\"\n\n[safety]\nrequire_explicit_live_enable = true\ndefault_start_paused_if_recovery_uncertain = true\n",
+                storage_path.display()
+            ),
+        )
+        .expect("global config should be written");
+    }
+
     fn write_managed_config(
         config_dir: &Path,
         storage_path: &Path,
         execution_connector: &str,
         timeframe: &str,
     ) {
-        fs::write(
-            config_dir.join("openticker.toml"),
-            format!(
-                "[service]\nenvironment = \"test\"\ndata_dir = \"./var\"\nbot_dir = \"./bots\"\n\n[http]\nenabled = true\nbind = \"127.0.0.1:8080\"\nrequest_log = true\nopenapi_enabled = true\nopenapi_path = \"/openapi.json\"\n\n[storage]\nkind = \"sqlite\"\npath = \"{}\"\nbusy_timeout_ms = 5000\n\n[observability]\nlog_level = \"info\"\nmetrics_enabled = true\nmetrics_path = \"/metrics\"\n\n[safety]\nrequire_explicit_live_enable = true\ndefault_start_paused_if_recovery_uncertain = true\n",
-                storage_path.display()
-            ),
-        )
-        .expect("global config should be written");
+        write_managed_global(config_dir, storage_path, "./bots");
 
         fs::write(
             config_dir.join("accounts").join("alpaca-paper.toml"),
