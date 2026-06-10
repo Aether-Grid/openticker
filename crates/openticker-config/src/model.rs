@@ -112,6 +112,16 @@ pub struct AccountConfig {
 /// `deny_unknown_fields` makes any attempt to submit those excluded fields a
 /// deserialization error, so secret references can never be changed (or
 /// echoed back) through account update requests.
+///
+/// Editable matrix: although the payload carries the full non-secret field
+/// set, the HTTP write pipeline's change-set validation treats connector
+/// settings as restart-scoped. In practice only `total_budget_usd` and
+/// `cash_balance_assets` are hot-writable; a write that changes `kind`,
+/// `mode`, `use_demo_mode`, `reconciliation_remote_snapshot`,
+/// `reconciliation_base_url`, or `execution_remote_submission` is rejected
+/// with 409 `account_settings_changed`. This is the intended contract: the
+/// full field set keeps every write an explicit statement of the desired
+/// account rather than a sparse patch.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountConfigUpdate {

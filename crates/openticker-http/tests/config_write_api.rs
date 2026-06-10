@@ -56,7 +56,7 @@ async fn send_json(
         .await
         .expect("request should complete");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX)
+    let bytes = to_bytes(response.into_body(), common::MAX_TEST_RESPONSE_BYTES)
         .await
         .expect("body should be readable");
     (
@@ -78,7 +78,7 @@ async fn send_empty(app: &axum::Router, method: &str, uri: &str) -> (StatusCode,
         .await
         .expect("request should complete");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX)
+    let bytes = to_bytes(response.into_body(), common::MAX_TEST_RESPONSE_BYTES)
         .await
         .expect("body should be readable");
     let body = if bytes.is_empty() {
@@ -272,6 +272,11 @@ async fn post_bot_creates_file_and_conflicts_on_duplicate() {
     assert_eq!(dup_status, StatusCode::CONFLICT, "{dup_response}");
     let dup_response = parse(&dup_response);
     assert!(dup_response["error"].as_str().is_some());
+    assert!(
+        violation_codes(&dup_response).contains(&"duplicate_bot".to_owned()),
+        "{dup_response}"
+    );
+    assert_eq!(dup_response["violations"][0]["scope"], "bot:msft");
 }
 
 #[tokio::test]
@@ -384,6 +389,154 @@ async fn concurrent_puts_serialize_without_server_errors() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn contended_parallel_puts_have_no_server_errors() {
+    let (_guard, dir) = common::fixture_config_dir("contended-puts");
+    let app = app_for(&dir);
+
+    let intervals: [u64; 4] = [1_100, 1_200, 1_300, 1_400];
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(intervals.len()));
+
+    let handles = intervals
+        .into_iter()
+        .map(|interval| {
+            let app = app.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            tokio::spawn(async move {
+                let mut body = bot_body();
+                body["polling_interval_ms"] = json!(interval);
+                // Release every writer at once to maximize real contention.
+                barrier.wait().await;
+                let (status, response) =
+                    send_json(&app, "PUT", "/v1/config/bots/aapl", &body, None).await;
+                (interval, status, response)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut successes = 0;
+    for handle in handles {
+        let (interval, status, response) = handle.await.expect("writer task should not panic");
+        assert!(
+            !status.is_server_error(),
+            "concurrent write for interval {interval} returned {status}: {response}"
+        );
+        if status.is_success() {
+            successes += 1;
+        }
+    }
+    assert!(successes > 0, "at least one concurrent write must succeed");
+
+    let raw = fs::read_to_string(dir.join("bots").join("aapl.toml")).unwrap();
+    let on_disk: toml::Value = toml::from_str(&raw).expect("final file should parse");
+    let on_disk_interval = on_disk["polling_interval_ms"]
+        .as_integer()
+        .and_then(|value| u64::try_from(value).ok())
+        .expect("final file should carry a polling interval");
+
+    let effective = get_json(&app, "/v1/config/effective").await;
+    let effective_interval = effective["bots"][0]["polling_interval_ms"]
+        .as_u64()
+        .expect("effective bot should carry a polling interval");
+
+    assert_eq!(
+        on_disk_interval, effective_interval,
+        "disk and effective state must agree after contended writes"
+    );
+    assert!(
+        intervals.contains(&effective_interval),
+        "final effective state must equal one of the writes, got {effective_interval}"
+    );
+}
+
+#[tokio::test]
+async fn hot_apply_of_allowed_change_preserves_running_bot() {
+    let (_guard, dir) = common::fixture_config_dir("hot-apply-running");
+    let app = app_for(&dir);
+
+    let (start_status, start_body) = send_empty(&app, "POST", "/v1/bots/aapl/start").await;
+    assert_eq!(start_status, StatusCode::OK, "{start_body}");
+    assert_eq!(start_body["state"], "running", "{start_body}");
+
+    let mut body = bot_body();
+    body["polling_interval_ms"] = json!(2_500);
+    let (status, response) = send_json(&app, "PUT", "/v1/config/bots/aapl", &body, None).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    let bot = get_json(&app, "/v1/bots/aapl").await;
+    assert_eq!(
+        bot["state"], "running",
+        "hot apply must not stop the running bot: {bot}"
+    );
+    assert_eq!(bot["polling"]["interval_ms"], 2_500, "{bot}");
+}
+
+#[tokio::test]
+async fn put_global_storage_path_change_conflicts_and_keeps_file() {
+    let (_guard, dir) = common::fixture_config_dir("put-global-storage");
+    let app = app_for(&dir);
+    let global_path = dir.join("openticker.toml");
+    let before = fs::read_to_string(&global_path).unwrap();
+
+    let effective = get_json(&app, "/v1/config/effective").await;
+    let mut global = effective["global"].clone();
+    global["storage"]["path"] = json!(dir.join("elsewhere.db").to_string_lossy());
+
+    let (status, response) = send_json(&app, "PUT", "/v1/config/global", &global, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+    let response = parse(&response);
+    assert!(
+        violation_codes(&response).contains(&"storage_changed".to_owned()),
+        "{response}"
+    );
+
+    let after = fs::read_to_string(&global_path).unwrap();
+    assert_eq!(
+        before, after,
+        "global file must be unchanged after a storage-change conflict"
+    );
+}
+
+#[tokio::test]
+async fn reload_success_bodies_carry_generation() {
+    let (_guard, dir) = common::fixture_config_dir("reload-generation");
+    let app = app_for(&dir);
+
+    // The service was loaded from this directory, so the first reload is a
+    // no-op; the body must still carry the generation for If-Match bootstrap.
+    let (status, body) = send_empty(&app, "POST", "/v1/config/reload").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "no_change");
+    assert_eq!(body["generation"], 0, "{body}");
+
+    // A config write bumps the generation; the next no-op reload reports it.
+    let mut bot = bot_body();
+    bot["polling_interval_ms"] = json!(2_000);
+    let (put_status, put_response) =
+        send_json(&app, "PUT", "/v1/config/bots/aapl", &bot, None).await;
+    assert_eq!(put_status, StatusCode::OK, "{put_response}");
+
+    let (status, body) = send_empty(&app, "POST", "/v1/config/reload").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "no_change");
+    assert_eq!(body["generation"], 1, "{body}");
+
+    // Mutate the file on disk behind the service's back so the next reload
+    // actually applies and reports the bumped generation.
+    let mut updated = common::fixture_bundle().instances[0].clone();
+    updated.polling_interval_ms = 3_000;
+    fs::write(
+        dir.join("bots").join("aapl.toml"),
+        openticker_config::render_new_document(&updated).expect("instance should render"),
+    )
+    .unwrap();
+
+    let (status, body) = send_empty(&app, "POST", "/v1/config/reload").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "reloaded");
+    assert_eq!(body["generation"], 2, "{body}");
+}
+
 #[tokio::test]
 async fn put_bot_id_mismatch_unknown_id_and_unsafe_create_id() {
     let (_guard, dir) = common::fixture_config_dir("bot-id-guards");
@@ -418,6 +571,29 @@ async fn put_bot_id_mismatch_unknown_id_and_unsafe_create_id() {
     );
     assert!(!dir.join("evil.toml").exists());
     assert!(!dir.parent().unwrap().join("evil.toml").exists());
+}
+
+#[tokio::test]
+async fn post_bot_with_overlong_id_is_rejected_early() {
+    let (_guard, dir) = common::fixture_config_dir("bot-id-overlong");
+    let app = app_for(&dir);
+
+    let long_id = "a".repeat(300);
+    let mut body = bot_body();
+    body["id"] = json!(long_id.clone());
+    body["enabled"] = json!(false);
+
+    let (status, response) = send_json(&app, "POST", "/v1/config/bots", &body, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{response}");
+
+    assert!(
+        !dir.join("bots").join(format!("{long_id}.toml")).exists(),
+        "no file may be created for a rejected oversized id"
+    );
+    let bot_files = fs::read_dir(dir.join("bots"))
+        .expect("bots dir should be readable")
+        .count();
+    assert_eq!(bot_files, 1, "only the fixture bot file should exist");
 }
 
 #[tokio::test]

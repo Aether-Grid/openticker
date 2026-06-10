@@ -10,9 +10,18 @@
 //! 5. validate the full candidate bundle (422, nothing written);
 //! 6. run change-set validation against the running instances (409, nothing
 //!    written);
-//! 7. prebuild the runtime from the candidate (422, nothing written);
+//! 7. prebuild the runtime from the candidate (422, nothing written to the
+//!    config files);
 //! 8. persist atomically (500 on I/O failure);
 //! 9. swap the runtime via [`apply_bundle_and_record`].
+//!
+//! The prebuild in step 7 deliberately skips the startup journal-prune step
+//! (see [`finish_config_write`]), so journal pruning of bots removed by a
+//! write happens on the next service startup instead of at write time.
+//! Boot-state persistence side effects of a prebuild whose write step later
+//! fails (e.g. orphan bot snapshot rows for a bot that was never committed)
+//! are accepted residual: they are harmless and cleaned up by that same
+//! startup prune.
 
 use crate::config_ops::{
     ConfigApplyError, ReloadTrigger, ReloadViolation, apply_bundle_and_record,
@@ -65,6 +74,12 @@ fn violations_response(message: &str, violations: &[ReloadViolation]) -> Respons
 
 /// Validates the optional `If-Match: <generation>` header against the current
 /// reload generation, returning the rejection response when the guard fails.
+///
+/// The accepted value is a bare `u64` config generation (as returned by the
+/// write/reload success bodies and `GET /v1/config/reload-status`), NOT an
+/// RFC 9110 entity-tag: quoted or weak `ETag` forms are rejected with 400, and
+/// `If-Match: *` is likewise unsupported (400).
+///
 /// Must be called while holding the config write lock so the generation
 /// cannot move between the check and the apply.
 fn check_if_match(state: &HttpState, headers: &HeaderMap) -> Option<Response> {
@@ -173,8 +188,28 @@ async fn finish_config_write(
         }
     }
 
-    let prebuilt =
-        openticker_runtime::Runtime::from_config_with_storage(&candidate).map_err(|error| {
+    // Prebuild from a CLONE of the candidate that has journal pruning
+    // disabled. `Runtime::from_config_with_storage` runs the startup
+    // `prune_bots_except` step when `global.storage.prune_removed_bots_on_startup`
+    // is set, but this prebuild runs BEFORE the disk commit point below: a
+    // `DELETE /v1/config/bots/{id}` would otherwise destroy that bot's journal
+    // history (including PnL recovery data) here, and a write that then fails
+    // at the persist step would leave a still-configured bot with destroyed
+    // history. Disabling the flag on the prebuild clone only — the real
+    // `candidate` written to disk and applied below keeps the user's prune
+    // setting — defers pruning of removed bots to the next service startup.
+    //
+    // Other boot-state persistence side effects of a prebuild whose write step
+    // later fails (e.g. orphan boot-state snapshot rows for a bot that was
+    // never committed) are accepted harmless residual: they are cleaned up by
+    // that same startup prune.
+    let prebuild_bundle = {
+        let mut bundle = candidate.clone();
+        bundle.global.storage.prune_removed_bots_on_startup = false;
+        bundle
+    };
+    let prebuilt = openticker_runtime::Runtime::from_config_with_storage(&prebuild_bundle)
+        .map_err(|error| {
             error_response(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("config write failed: {error}"),
@@ -345,10 +380,17 @@ pub(crate) async fn put_config_bot_handler(
     }
 }
 
+/// Maximum accepted bot id length in bytes. Keeps `<id>.toml` comfortably
+/// under platform filename limits, so an oversized id is rejected early with
+/// a 422 instead of surfacing later as a filesystem error (500) that would
+/// leak the absolute bots-directory path.
+const MAX_BOT_ID_LEN: usize = 64;
+
 /// Allows only filename-safe bot ids so a crafted id can never escape the
-/// bots directory (path traversal guard).
+/// bots directory (path traversal guard), capped at [`MAX_BOT_ID_LEN`] bytes.
 fn bot_id_is_safe_filename(id: &str) -> bool {
     !id.is_empty()
+        && id.len() <= MAX_BOT_ID_LEN
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -364,7 +406,7 @@ pub(crate) async fn create_config_bot_handler(
         return error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             format!(
-                "config write failed: bot id `{}` is not a safe filename (allowed: alphanumeric, `-`, `_`)",
+                "config write failed: bot id `{}` is not a safe filename (allowed: 1-{MAX_BOT_ID_LEN} characters of alphanumeric, `-`, `_`)",
                 body.id
             ),
         );
@@ -377,9 +419,14 @@ pub(crate) async fn create_config_bot_handler(
 
     let path = sources.bots_dir.join(format!("{}.toml", body.id));
     if sources.instance_by_id(&body.id).is_some() || path.exists() {
-        return error_response(
-            StatusCode::CONFLICT,
-            format!("bot `{}` already exists in the managed config", body.id),
+        let violations = vec![ReloadViolation {
+            code: "duplicate_bot",
+            scope: format!("bot:{}", body.id),
+            message: format!("bot `{}` already exists in the managed config", body.id),
+        }];
+        return violations_response(
+            &format!("config write failed: {}", violation_summary(&violations)),
+            &violations,
         );
     }
 
@@ -513,6 +560,14 @@ pub(crate) async fn put_config_risk_profile_handler(
 /// `id` or the secret env references; those are copied from the on-disk
 /// account. The response uses the redacted effective-account shape, so env
 /// var names never appear in any response.
+///
+/// Editable matrix: due to change-set validation against the running
+/// configuration, only `total_budget_usd` and `cash_balance_assets` are
+/// hot-writable. Submitting a changed `kind`, `mode`, `use_demo_mode`,
+/// `reconciliation_remote_snapshot`, `reconciliation_base_url`, or
+/// `execution_remote_submission` returns 409 with violation code
+/// `account_settings_changed` — those settings are restart-scoped by design,
+/// and this is the intended contract of the endpoint.
 pub(crate) async fn put_config_account_handler(
     State(state): State<HttpState>,
     Path(account_id): Path<String>,

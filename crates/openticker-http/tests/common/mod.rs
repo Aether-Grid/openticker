@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Table;
 
+/// Upper bound when collecting response bodies in tests (16 MB). Kept
+/// explicit instead of `usize::MAX` so that response-size discipline is
+/// enforced if streaming or otherwise unbounded endpoints are ever added.
+// Not every test binary that includes `common` reads response bodies.
+#[allow(dead_code)]
+pub(crate) const MAX_TEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 pub(crate) fn fixture_bundle() -> ConfigBundle {
     ConfigBundle {
         global: GlobalConfig {

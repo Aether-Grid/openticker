@@ -574,11 +574,17 @@ pub(crate) async fn config_reload_handler(State(state): State<HttpState>) -> imp
     match reload_from_disk(&state, ReloadTrigger::ManualApi).await {
         Ok(reloaded) => {
             let runtime = state.runtime.read().await;
+            // Both success shapes carry the current config generation so a
+            // client can bootstrap its `If-Match` token from this one call.
+            let generation = state
+                .reload_generation
+                .load(std::sync::atomic::Ordering::SeqCst);
             (
                 StatusCode::OK,
                 Json(json!({
                     "status": if reloaded { "reloaded" } else { "no_change" },
                     "reloaded": reloaded,
+                    "generation": generation,
                     "service": runtime.status(),
                 })),
             )
