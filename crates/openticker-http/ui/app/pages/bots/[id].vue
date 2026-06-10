@@ -107,6 +107,14 @@ function fillField(record: ActivityRecord, key: string): unknown {
         >
           <template #actions>
             <UButton
+              :to="`/config/bots/${botId}`"
+              color="neutral"
+              variant="ghost"
+              size="sm"
+              icon="i-lucide-pencil"
+              label="Edit config"
+            />
+            <UButton
               color="neutral"
               variant="solid"
               size="sm"
