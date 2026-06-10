@@ -5,7 +5,7 @@ use openticker_config::{
     StorageConfig,
 };
 use openticker_core::{ExecutionMode, IndicatorSignalMetadataFilters, MarketType, Timeframe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Table;
 
@@ -119,4 +119,57 @@ fn temp_db_path(prefix: &str) -> PathBuf {
         .expect("clock should be monotonic")
         .as_nanos();
     std::env::temp_dir().join(format!("openticker-{prefix}-{timestamp}.db"))
+}
+
+/// Removes the materialized config directory (including its sqlite storage)
+/// when dropped.
+#[allow(dead_code)]
+pub(crate) struct ConfigDirGuard {
+    path: PathBuf,
+}
+
+impl Drop for ConfigDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Materializes a managed config directory equivalent to [`fixture_bundle`]
+/// (openticker.toml + accounts/ + risk/ + bots/), written through
+/// `render_new_document` so the writer participates in the fixtures too.
+/// Storage points inside the directory to keep tests isolated.
+#[allow(dead_code)]
+pub(crate) fn fixture_config_dir(prefix: &str) -> (ConfigDirGuard, PathBuf) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("openticker-http-cfgwrite-{prefix}-{timestamp}"));
+    std::fs::create_dir_all(dir.join("accounts")).expect("accounts dir should be created");
+    std::fs::create_dir_all(dir.join("risk")).expect("risk dir should be created");
+    std::fs::create_dir_all(dir.join("bots")).expect("bots dir should be created");
+
+    let mut bundle = fixture_bundle();
+    bundle.global.service.bot_dir = "./bots".into();
+    bundle.global.storage.path = dir.join("runtime.db");
+
+    write_rendered(&dir.join("openticker.toml"), &bundle.global);
+    write_rendered(
+        &dir.join("accounts").join("alpaca-paper.toml"),
+        &bundle.accounts[0],
+    );
+    write_rendered(
+        &dir.join("risk").join("equities-default.toml"),
+        &bundle.risk_profiles[0],
+    );
+    write_rendered(&dir.join("bots").join("aapl.toml"), &bundle.instances[0]);
+
+    (ConfigDirGuard { path: dir.clone() }, dir)
+}
+
+#[allow(dead_code)]
+fn write_rendered<T: serde::Serialize>(path: &Path, value: &T) {
+    let rendered =
+        openticker_config::render_new_document(value).expect("fixture entity should render");
+    std::fs::write(path, rendered).expect("fixture file should be written");
 }

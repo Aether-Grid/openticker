@@ -22,7 +22,6 @@ pub(crate) enum ReloadTrigger {
     /// `POST /v1/config/reload`.
     ManualApi,
     /// A config-mutating API endpoint (wired in by the config write endpoints).
-    #[allow(dead_code)]
     ConfigWrite,
     /// The config directory file watcher.
     #[allow(dead_code)]

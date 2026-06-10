@@ -28,6 +28,11 @@ pub const DASHBOARD_LEDGER_PATH: &str = "/api/ledger";
 pub const CONFIG_RELOAD_PATH: &str = "/v1/config/reload";
 pub const CONFIG_RELOAD_STATUS_PATH: &str = "/v1/config/reload-status";
 pub const CONFIG_EFFECTIVE_PATH: &str = "/v1/config/effective";
+pub const CONFIG_GLOBAL_PATH: &str = "/v1/config/global";
+pub const CONFIG_BOTS_PATH: &str = "/v1/config/bots";
+pub const CONFIG_BOT_PATH: &str = "/v1/config/bots/{id}";
+pub const CONFIG_RISK_PROFILE_PATH: &str = "/v1/config/risk-profiles/{id}";
+pub const CONFIG_ACCOUNT_PATH: &str = "/v1/config/accounts/{id}";
 pub const CONNECTORS_MATRIX_PATH: &str = "/v1/connectors/matrix";
 pub const CONNECTORS_STATUS_PATH: &str = "/v1/connectors/status";
 pub const EVENTS_PATH: &str = "/v1/events";
@@ -210,6 +215,36 @@ pub(crate) const HTTP_SURFACE_ROUTES: &[HttpRouteDescriptor] = &[
         path: CONFIG_EFFECTIVE_PATH,
         method: "get",
         operation_id: "config_effective_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_GLOBAL_PATH,
+        method: "put",
+        operation_id: "put_config_global_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_BOTS_PATH,
+        method: "post",
+        operation_id: "create_config_bot_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_BOT_PATH,
+        method: "put",
+        operation_id: "put_config_bot_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_BOT_PATH,
+        method: "delete",
+        operation_id: "delete_config_bot_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_RISK_PROFILE_PATH,
+        method: "put",
+        operation_id: "put_config_risk_profile_handler",
+    },
+    HttpRouteDescriptor {
+        path: CONFIG_ACCOUNT_PATH,
+        method: "put",
+        operation_id: "put_config_account_handler",
     },
     HttpRouteDescriptor {
         path: CONNECTORS_MATRIX_PATH,

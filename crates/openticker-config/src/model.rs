@@ -105,6 +105,53 @@ pub struct AccountConfig {
     pub total_budget_usd: f64,
 }
 
+/// An API-facing account update payload: every [`AccountConfig`] field except
+/// `id` and the secret env references (`api_key_env`, `api_secret_env`,
+/// `passphrase_env`), which are immutable through the HTTP surface.
+///
+/// `deny_unknown_fields` makes any attempt to submit those excluded fields a
+/// deserialization error, so secret references can never be changed (or
+/// echoed back) through account update requests.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountConfigUpdate {
+    pub kind: String,
+    pub mode: ExecutionMode,
+    #[serde(default)]
+    pub use_demo_mode: bool,
+    #[serde(default)]
+    pub reconciliation_remote_snapshot: bool,
+    #[serde(default)]
+    pub execution_remote_submission: Option<bool>,
+    #[serde(default)]
+    pub reconciliation_base_url: Option<String>,
+    #[serde(default)]
+    pub cash_balance_assets: Vec<String>,
+    pub total_budget_usd: f64,
+}
+
+impl AccountConfigUpdate {
+    /// Builds a full [`AccountConfig`] from this update, copying the `id` and
+    /// the three secret env references from `existing` untouched.
+    #[must_use]
+    pub fn into_account(self, existing: &AccountConfig) -> AccountConfig {
+        AccountConfig {
+            id: existing.id.clone(),
+            kind: self.kind,
+            mode: self.mode,
+            api_key_env: existing.api_key_env.clone(),
+            api_secret_env: existing.api_secret_env.clone(),
+            passphrase_env: existing.passphrase_env.clone(),
+            use_demo_mode: self.use_demo_mode,
+            reconciliation_remote_snapshot: self.reconciliation_remote_snapshot,
+            execution_remote_submission: self.execution_remote_submission,
+            reconciliation_base_url: self.reconciliation_base_url,
+            cash_balance_assets: self.cash_balance_assets,
+            total_budget_usd: self.total_budget_usd,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskProfileConfig {
     pub id: String,

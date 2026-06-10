@@ -1,9 +1,14 @@
+use crate::config_write_handlers::{
+    create_config_bot_handler, delete_config_bot_handler, put_config_account_handler,
+    put_config_bot_handler, put_config_global_handler, put_config_risk_profile_handler,
+};
 use crate::constants::{
     BOT_CANCEL_OPEN_ORDERS_PATH, BOT_CLOSE_POSITIONS_PATH, BOT_CYCLE_DETAIL_PATH, BOT_CYCLES_PATH,
     BOT_LANES_PATH, BOT_MANUAL_SIGNAL_PATH, BOT_PATH, BOT_PAUSE_PATH, BOT_RECONCILE_PATH,
     BOT_RECONCILIATION_REPORT_PATH, BOT_RESUME_PATH, BOT_SIMULATE_BAR_PATH,
     BOT_SIMULATE_TRADE_PATH, BOT_SNAPSHOT_PATH, BOT_START_PATH, BOT_STOP_PATH, BOT_TICK_PATH,
-    BOTS_PATH, CONFIG_EFFECTIVE_PATH, CONFIG_RELOAD_PATH, CONFIG_RELOAD_STATUS_PATH,
+    BOTS_PATH, CONFIG_ACCOUNT_PATH, CONFIG_BOT_PATH, CONFIG_BOTS_PATH, CONFIG_EFFECTIVE_PATH,
+    CONFIG_GLOBAL_PATH, CONFIG_RELOAD_PATH, CONFIG_RELOAD_STATUS_PATH, CONFIG_RISK_PROFILE_PATH,
     CONNECTORS_MATRIX_PATH, CONNECTORS_STATUS_PATH, DASHBOARD_ACTIVITY_PATH,
     DASHBOARD_BOT_DETAIL_PATH, DASHBOARD_BOTS_PATH, DASHBOARD_CONFIG_PATH,
     DASHBOARD_CONNECTORS_PATH, DASHBOARD_CYCLE_DETAIL_PATH, DASHBOARD_CYCLES_PATH,
@@ -31,7 +36,7 @@ use crate::handlers::{
 };
 use crate::state::HttpState;
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use tower_http::trace::{
     DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
 };
@@ -76,6 +81,17 @@ pub fn build_router(state: HttpState) -> Router {
         .route(CONFIG_RELOAD_PATH, post(config_reload_handler))
         .route(CONFIG_RELOAD_STATUS_PATH, get(config_reload_status_handler))
         .route(CONFIG_EFFECTIVE_PATH, get(config_effective_handler))
+        .route(CONFIG_GLOBAL_PATH, put(put_config_global_handler))
+        .route(CONFIG_BOTS_PATH, post(create_config_bot_handler))
+        .route(
+            CONFIG_BOT_PATH,
+            put(put_config_bot_handler).delete(delete_config_bot_handler),
+        )
+        .route(
+            CONFIG_RISK_PROFILE_PATH,
+            put(put_config_risk_profile_handler),
+        )
+        .route(CONFIG_ACCOUNT_PATH, put(put_config_account_handler))
         .route(CONNECTORS_MATRIX_PATH, get(connectors_matrix_handler))
         .route(CONNECTORS_STATUS_PATH, get(connectors_status_handler))
         .route(DATA_STREAMS_PATH, get(list_data_streams_handler))
