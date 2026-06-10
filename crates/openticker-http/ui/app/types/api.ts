@@ -683,9 +683,17 @@ export interface ConfigReloadStatusResponse {
   history: ConfigReloadStatus[]
 }
 
-/** Result of a config mutation; 422/409 are returned for inline rendering, not thrown. */
+/**
+ * Result of a config mutation; 422 and 409 are returned for inline rendering,
+ * not thrown. A 409 carries `violations`; a 422 carries `error` only.
+ */
 export interface ConfigSaveResult<T = unknown> {
   ok: boolean
+  /**
+   * HTTP status of the error response (409 / 422 / etc). Left undefined on
+   * success: the success status varies by route (createBot is 201, others 200)
+   * and callers branch on `ok` rather than the success status.
+   */
   status?: number
   error?: string
   violations?: ConfigViolation[]

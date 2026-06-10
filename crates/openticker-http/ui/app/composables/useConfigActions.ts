@@ -21,10 +21,13 @@ function isFetchError(err: unknown): err is FetchError {
 
 /**
  * Config mutation + read wrappers. Mutations never throw: validation (422) and
- * change-set/stale/duplicate conflicts (409) are returned as ConfigSaveResult
- * for inline display. Anything else (404/409-not-inline aside, 500, 501,
- * network) is toasted as an unexpected error and also returned. Successes get a
- * short confirmation toast.
+ * conflicts (409) are returned as ConfigSaveResult for inline display. The two
+ * server error shapes differ: a 409 (change-set / stale_generation /
+ * duplicate_bot) carries `violations` that the form maps to fields by scope (or
+ * the banner); a 422 is a plain `{error}` with NO violations and surfaces as a
+ * general-error banner only. Anything else (404, 500, 501, network) is toasted
+ * as an unexpected error and also returned. Successes get a short confirmation
+ * toast.
  */
 export function useConfigActions() {
   const { api } = useApi()
@@ -50,9 +53,11 @@ export function useConfigActions() {
     try {
       const body = await api<Record<string, unknown>>(path, opts)
       toast.add({ title: label, color: 'success', icon: 'i-lucide-check', duration: 2500 })
+      // `status` is intentionally left undefined on success: it varies by route
+      // (createBot is 201, the rest are 200) and callers branch on `ok`, not on
+      // the success status code.
       return {
         ok: true,
-        status: 200,
         generation: typeof body?.generation === 'number' ? body.generation : undefined,
         entity: entityKey ? (body?.[entityKey] as T | undefined) : undefined
       }

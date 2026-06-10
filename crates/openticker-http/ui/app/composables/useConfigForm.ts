@@ -10,6 +10,15 @@ export interface UseConfigFormOptions<T> {
   save: (draft: T, generation?: number) => Promise<ConfigSaveResult>
   /** Optional client-side structural validation run before save(). */
   validate?: (draft: T) => FieldErrors
+  /**
+   * This form's entity scope, used to decide whether a server 409 violation's
+   * `scope` matches this page so its message can land on an inline field
+   * instead of the banner. Pass `"global"`, `"account:<id>"`, or `"bot:<id>"`.
+   * Omit it when the entity has no change-set scope (e.g. risk profiles): with
+   * no configured scope every violation falls through to the banner. May be a
+   * getter so a page can compute it from a reactive id.
+   */
+  scope?: string | (() => string)
 }
 
 export interface UseConfigForm<T> {
@@ -23,6 +32,8 @@ export interface UseConfigForm<T> {
   fieldErrors: Ref<FieldErrors>
   unmappedViolations: Ref<ConfigViolation[]>
   generalError: Ref<string | null>
+  /** True when any inline field error, unmapped violation, or general error is present. */
+  hasErrors: ComputedRef<boolean>
   load: () => Promise<void>
   discard: () => void
   submit: () => Promise<boolean>
@@ -31,32 +42,58 @@ export interface UseConfigForm<T> {
 }
 
 /**
- * Maps a backend ConfigViolation to a draft field path when the code clearly
- * targets one, otherwise returns null (rendered as a banner). Coarse scopes
- * (`global`, `bot:<id>`, `account:<id>`) never map to a field by themselves.
+ * Maps a backend ConfigViolation code to a draft field path, paired with the
+ * coarse scope category (`'global' | 'account' | 'bot'`) the code originates
+ * from. A code only maps to an inline field when the form's configured scope
+ * also matches this category (see `applyViolations`); otherwise the violation
+ * is surfaced as a banner so it is never silently dropped. Codes with no
+ * field-level target (e.g. `account_set_changed`, `bindings_changed_running`)
+ * are absent here and always render as a banner.
  */
-function violationFieldPath(violation: ConfigViolation): string | null {
+interface FieldMapping {
+  path: string
+  scopeKind: 'global' | 'account' | 'bot'
+}
+
+function violationFieldMapping(violation: ConfigViolation): FieldMapping | null {
   switch (violation.code) {
     case 'timeframe_changed_running':
-      return 'timeframe'
+      return { path: 'timeframe', scopeKind: 'bot' }
     case 'symbols_changed_running':
-      return 'symbols'
+      return { path: 'symbols', scopeKind: 'bot' }
     case 'storage_changed':
-      return 'storage'
+      return { path: 'storage', scopeKind: 'global' }
     case 'bot_dir_changed':
-      return 'service.bot_dir'
+      return { path: 'service.bot_dir', scopeKind: 'global' }
     default:
       return null
   }
 }
 
+/** The coarse scope category of a violation `scope` string, or null if unknown. */
+function scopeKindOf(scope: string): 'global' | 'account' | 'bot' | null {
+  if (scope === 'global') return 'global'
+  if (scope.startsWith('account:')) return 'account'
+  if (scope.startsWith('bot:')) return 'bot'
+  return null
+}
+
 /**
  * Generic config form engine: clone-edit-validate-submit with reload-after-save
  * and never optimistic. `draft` is a structuredClone of `original`; dirtiness
- * is structural via deepEqual. On submit, client validate() runs first and
- * aborts on any error; on a 422/409 the returned violations are mapped onto
- * field errors (unmappable ones become a banner). A successful write always
- * re-loads from the server rather than trusting the local draft.
+ * is structural via deepEqual. A successful write always re-loads from the
+ * server rather than trusting the local draft.
+ *
+ * Error surfaces, in increasing distance from the user's edit:
+ *  - Client `validate()` runs first on submit and aborts on any error,
+ *    producing inline `fieldErrors` keyed by draft field path.
+ *  - A server 409 carries `violations` (the change-set / stale_generation /
+ *    duplicate_bot conflicts). Each violation lands inline when its code maps
+ *    to a field AND its `scope` matches this form's configured scope; otherwise
+ *    it is shown in the banner (`unmappedViolations`). Every violation lands in
+ *    exactly one place — inline or banner — never neither.
+ *  - A server 422 is a plain `{error}` with NO violations; it becomes a single
+ *    `generalError` banner only.
  */
 export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigForm<T> {
   const original = ref<T | null>(null) as Ref<T | null>
@@ -75,6 +112,17 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
     if (original.value === null || draft.value === null) return false
     return !deepEqual(original.value, draft.value)
   })
+
+  const hasErrors = computed(
+    () =>
+      Object.keys(fieldErrors.value).length > 0 ||
+      unmappedViolations.value.length > 0 ||
+      generalError.value !== null
+  )
+
+  /** Resolves the form's configured scope (literal or getter), if any. */
+  const resolveScope = (): string | undefined =>
+    typeof options.scope === 'function' ? options.scope() : options.scope
 
   const clearErrors = () => {
     fieldErrors.value = {}
@@ -97,6 +145,10 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
     }
   }
 
+  // Reverts the draft to the last-loaded `original` (keeping its known
+  // generation). It does NOT resolve staleness against the server: only load()
+  // fetches the latest server state. Clearing `stale` here just dismisses the
+  // warning for the now-reverted draft.
   const discard = () => {
     draft.value = original.value === null ? null : structuredClone(original.value)
     stale.value = false
@@ -104,13 +156,35 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
     clearErrors()
   }
 
+  /**
+   * Routes each server violation to exactly one surface: an inline field error
+   * when its code maps to a field AND this form has a configured scope that
+   * matches the violation's scope; otherwise the banner. Mapping a field always
+   * requires a configured scope, so a form with no scope sends everything to
+   * the banner. This guarantees no violation is silently lost into a field path
+   * the current page does not even render.
+   */
   const applyViolations = (violations: ConfigViolation[]) => {
+    const formScope = resolveScope()
+    const formScopeKind = formScope ? scopeKindOf(formScope) : null
     const mapped: FieldErrors = {}
     const unmapped: ConfigViolation[] = []
     for (const violation of violations) {
-      const path = violationFieldPath(violation)
-      if (path && !(path in mapped)) mapped[path] = violation.message
-      else if (!path) unmapped.push(violation)
+      const mapping = violationFieldMapping(violation)
+      // Inline only when the code targets a field AND the violation's own scope
+      // matches the scope this form is editing. A mismatch (e.g. a bot-scoped
+      // violation arriving on the global page) routes to the banner so it is
+      // never written to a field the page does not render.
+      const scopeMatches =
+        mapping !== null &&
+        formScope !== undefined &&
+        violation.scope === formScope &&
+        mapping.scopeKind === formScopeKind
+      if (mapping && scopeMatches && !(mapping.path in mapped)) {
+        mapped[mapping.path] = violation.message
+      } else {
+        unmapped.push(violation)
+      }
     }
     fieldErrors.value = { ...fieldErrors.value, ...mapped }
     unmappedViolations.value = unmapped
@@ -140,8 +214,16 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
       conflict.value = result.status === 409
       if (result.violations && result.violations.length > 0) {
         applyViolations(result.violations)
-        if (unmappedViolations.value.length > 0) {
+        const landedInline = Object.keys(fieldErrors.value).length > 0
+        const landedInBanner = unmappedViolations.value.length > 0
+        if (landedInBanner) {
+          // Banner already lists the unmapped violations; lift the server error
+          // (or their messages) into generalError so it renders as a heading.
           generalError.value = result.error ?? unmappedViolations.value.map((v) => v.message).join('; ')
+        } else if (!landedInline) {
+          // Defense-in-depth: violations were returned but none landed inline or
+          // in the banner. Never swallow them — surface the server error.
+          generalError.value = result.error ?? 'Save failed'
         }
       } else {
         generalError.value = result.error ?? 'Save failed'
@@ -158,11 +240,16 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
     // Already aligned with what we last loaded: nothing to do.
     if (generation === loadedGeneration.value) return
     if (!dirty.value) {
-      // Safe to silently refresh to the new server state, then adopt its
-      // generation as our If-Match token for the next write.
-      void load().then(() => {
-        loadedGeneration.value = generation
-      })
+      // A load() is already running (e.g. from a prior rapid generation bump):
+      // skip launching an overlapping one. The watch on `original` will adopt
+      // the generation that load() actually fetched, so we do not stamp this
+      // (possibly already-superseded) generation over it.
+      if (pending.value) return
+      // Adopt the new generation synchronously as our If-Match token *before*
+      // awaiting load(), so two rapid changes cannot interleave and leave a
+      // stale generation stamped after the fetch completes.
+      loadedGeneration.value = generation
+      void load()
     } else {
       // Local edits in flight: warn rather than clobber the user's work.
       stale.value = true
@@ -188,6 +275,7 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
     fieldErrors,
     unmappedViolations,
     generalError,
+    hasErrors,
     load,
     discard,
     submit,

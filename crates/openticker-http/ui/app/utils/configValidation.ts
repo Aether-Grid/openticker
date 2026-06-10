@@ -46,9 +46,23 @@ export function positiveInt(errors: FieldErrors, path: string, value: unknown, l
   }
 }
 
-/** Requires a percentage in the half-open range (0, 100]. */
+/**
+ * Requires a percentage in the half-open range (0, 100]. Used for `budget.pct`,
+ * which the backend rejects at `<= 0` (see `validate_instance_budget`).
+ */
 export function pct(errors: FieldErrors, path: string, value: unknown, label = 'Percentage'): void {
   if (!isNumber(value) || value <= 0 || value > 100) add(errors, path, `${label} must be between 0 and 100`)
+}
+
+/**
+ * Requires a percentage in the closed range [0, 100]. Used for
+ * `max_daily_loss_pct`: the backend imposes NO lower bound on this field (it is
+ * not checked in validation.rs), so a client rejecting 0 would be stricter than
+ * the server and block a valid save. Zero is accepted here; the (0, 100] upper
+ * bound is retained as a UI sanity guard the server does not contradict.
+ */
+export function nonNegativePct(errors: FieldErrors, path: string, value: unknown, label = 'Percentage'): void {
+  if (!isNumber(value) || value < 0 || value > 100) add(errors, path, `${label} must be between 0 and 100`)
 }
 
 function requireNonEmpty(errors: FieldErrors, path: string, value: unknown, label: string): void {
@@ -109,7 +123,8 @@ function validateRiskFields(errors: FieldErrors, prefix: string, value: RiskProf
   const v = value as Record<string, unknown>
 
   if (v.max_daily_loss_pct !== null && v.max_daily_loss_pct !== undefined) {
-    pct(errors, at('max_daily_loss_pct'), v.max_daily_loss_pct, 'Max daily loss')
+    // Backend imposes no lower bound on max_daily_loss_pct, so allow 0.
+    nonNegativePct(errors, at('max_daily_loss_pct'), v.max_daily_loss_pct, 'Max daily loss')
   }
   if (v.max_open_positions !== null && v.max_open_positions !== undefined) {
     nonNegativeInt(errors, at('max_open_positions'), v.max_open_positions, 'Max open positions')
@@ -144,8 +159,9 @@ function validateRiskFields(errors: FieldErrors, prefix: string, value: RiskProf
 export function validateRiskProfile(draft: RiskProfileConfig): FieldErrors {
   const errors: FieldErrors = {}
   requireNonEmpty(errors, 'id', draft.id, 'Profile id')
-  // A profile requires both loss and cap unconditionally (not optional like overrides).
-  pct(errors, 'max_daily_loss_pct', draft.max_daily_loss_pct, 'Max daily loss')
+  // A profile requires both loss and cap unconditionally (not optional like
+  // overrides). The backend does not bound max_daily_loss_pct, so allow 0.
+  nonNegativePct(errors, 'max_daily_loss_pct', draft.max_daily_loss_pct, 'Max daily loss')
   positive(errors, 'max_order_notional_usd', draft.max_order_notional_usd, 'Max order notional')
   validateRiskFields(errors, '', draft)
   return errors

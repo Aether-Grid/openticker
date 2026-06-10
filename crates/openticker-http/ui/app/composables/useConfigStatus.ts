@@ -22,7 +22,8 @@ export function useConfigStatus() {
     history: []
   }))
 
-  const error = useState<unknown>('config-status-error', () => null)
+  // Normalized to a message string so consuming pages need not narrow `unknown`.
+  const error = useState<string | null>('config-status-error', () => null)
 
   const generation = computed(() => state.value.generation)
   const last = computed(() => state.value.last)
@@ -38,7 +39,9 @@ export function useConfigStatus() {
       }
       error.value = null
     } catch (err) {
-      error.value = err
+      // Swallow rather than rethrow: pollStatus is driven by useAutoRefresh,
+      // which must not see a thrown error. Normalize to a message string.
+      error.value = err instanceof Error ? err.message : String(err)
     }
   }
 
