@@ -111,9 +111,9 @@ export function validateAccount(draft: AccountConfigUpdate): FieldErrors {
   const errors: FieldErrors = {}
   requireNonEmpty(errors, 'kind', draft.kind, 'Kind')
   requireNonEmpty(errors, 'mode', draft.mode, 'Mode')
-  if (!isNumber(draft.total_budget_usd) || draft.total_budget_usd < 0) {
-    add(errors, 'total_budget_usd', 'Total budget must be a non-negative number')
-  }
+  // The backend requires a strictly positive, finite budget
+  // (validate_account_total_budget: rejects `<= 0.0`), so mirror that here.
+  positive(errors, 'total_budget_usd', draft.total_budget_usd, 'Total budget')
   return errors
 }
 

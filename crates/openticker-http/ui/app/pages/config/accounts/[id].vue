@@ -8,9 +8,8 @@ const route = useRoute()
 const id = computed(() => route.params.id as string)
 
 const actions = useConfigActions()
-const status = useConfigStatus()
 
-const form = useConfigForm<EffectiveAccountConfig>({
+const { form, notFound, reload } = useConfigEditor<EffectiveAccountConfig>({
   load: async () => {
     const eff = await actions.fetchEffective()
     return eff.accounts.find((a) => a.id === id.value) ?? null
@@ -43,25 +42,6 @@ const form = useConfigForm<EffectiveAccountConfig>({
   scope: () => `account:${id.value}`
 })
 
-// Seed the If-Match token from the shared reload-status generation and keep it
-// fresh: a clean form silently reloads on an out-of-band change; a dirty form
-// raises the stale banner instead.
-watch(
-  () => status.generation.value,
-  (g) => {
-    if (g != null) form.onGenerationChange(g)
-  },
-  { immediate: true }
-)
-useAutoRefresh(status.poll)
-
-onMounted(() => {
-  void status.pollStatus()
-  void form.load()
-})
-
-const notFound = computed(() => !form.pending.value && form.original.value === null)
-
 // UInput v-model is string-typed; the draft field is `string | null`. Proxy the
 // null<->'' mapping here so the input never receives null. The save callback
 // re-collapses an empty string back to null.
@@ -78,11 +58,6 @@ const modeItems = [
 ]
 
 const RESTART_HINT = 'Changing this requires a service restart (returns a conflict if changed while running).'
-
-onBeforeRouteLeave(() => {
-  if (form.dirty.value && !window.confirm('Discard unsaved changes?')) return false
-  return true
-})
 </script>
 
 <template>
@@ -144,7 +119,7 @@ onBeforeRouteLeave(() => {
             :pending="form.pending.value"
             @save="form.submit"
             @discard="form.discard"
-            @reload="form.load"
+            @reload="reload"
           >
             <div
               v-if="form.draft.value"

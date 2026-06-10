@@ -9,9 +9,10 @@ interface ConfigStatusState {
 /**
  * Shared reload-status state. `pollStatus()` hits
  * `GET /v1/config/reload-status` and updates the reactive generation/last/
- * history. Editor pages can watch `generation` and call
- * `form.onGenerationChange(generation)` to react to out-of-band reloads;
- * `poll` is suitable for passing to useAutoRefresh.
+ * history. Editor pages react to out-of-band reloads by watching `generation`
+ * (see `useConfigEditor`, which reloads + re-stamps a clean form or raises the
+ * stale banner on a dirty one); `poll` is suitable for passing to
+ * useAutoRefresh.
  */
 export function useConfigStatus() {
   const { api } = useApi()

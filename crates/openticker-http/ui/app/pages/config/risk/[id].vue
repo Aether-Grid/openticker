@@ -8,13 +8,12 @@ const route = useRoute()
 const id = computed(() => route.params.id as string)
 
 const actions = useConfigActions()
-const status = useConfigStatus()
 
 // Stash the effective bots list at load time so the header can show which bots
 // reference this profile, without a second fetch on every poll.
 const bots = ref<BotConfig[]>([])
 
-const form = useConfigForm<RiskProfileConfig>({
+const { form, notFound, reload } = useConfigEditor<RiskProfileConfig>({
   load: async () => {
     const eff = await actions.fetchEffective()
     bots.value = eff.bots ?? []
@@ -27,33 +26,8 @@ const form = useConfigForm<RiskProfileConfig>({
   // falls through to the conflict banner rather than mapping to a field.
 })
 
-// Seed the If-Match token from the shared reload-status generation and keep it
-// fresh: a clean form silently reloads on an out-of-band change; a dirty form
-// raises the stale banner instead.
-watch(
-  () => status.generation.value,
-  (g) => {
-    if (g != null) form.onGenerationChange(g)
-  },
-  { immediate: true }
-)
-useAutoRefresh(status.poll)
-
-onMounted(() => {
-  void status.pollStatus()
-  void form.load()
-})
-
-// Bots that reference this risk profile.
-const usedBy = computed<BotConfig[]>(() => bots.value.filter((b) => b.risk?.profile === id.value))
-
-// Distinguish "loading" from "loaded but not found".
-const notFound = computed(() => !form.pending.value && form.original.value === null)
-
-onBeforeRouteLeave(() => {
-  if (form.dirty.value && !window.confirm('Discard unsaved changes?')) return false
-  return true
-})
+// Bots that reference this risk profile. BotConfig.risk is non-optional.
+const usedBy = computed<BotConfig[]>(() => bots.value.filter((b) => b.risk.profile === id.value))
 </script>
 
 <template>
@@ -134,7 +108,7 @@ onBeforeRouteLeave(() => {
             :pending="form.pending.value"
             @save="form.submit"
             @discard="form.discard"
-            @reload="form.load"
+            @reload="reload"
           >
             <div
               v-if="form.draft.value"

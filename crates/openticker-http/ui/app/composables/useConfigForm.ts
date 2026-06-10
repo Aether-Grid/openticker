@@ -38,7 +38,14 @@ export interface UseConfigForm<T> {
   discard: () => void
   submit: () => Promise<boolean>
   errorFor: (path: string) => string | undefined
-  onGenerationChange: (generation: number) => void
+  /**
+   * Authoritatively stamps the generation that will be sent as the `If-Match`
+   * header on the next save. Callers use this to record the server generation
+   * observed at the most recent successful load. Set unconditionally: the
+   * caller (see `useConfigEditor`) is responsible for only stamping after a
+   * load has resolved, so this is race-free with respect to in-flight loads.
+   */
+  setGeneration: (generation: number) => void
 }
 
 /**
@@ -236,29 +243,20 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
 
   const errorFor = (path: string): string | undefined => fieldErrors.value[path]
 
-  const onGenerationChange = (generation: number) => {
-    // Already aligned with what we last loaded: nothing to do.
-    if (generation === loadedGeneration.value) return
-    if (!dirty.value) {
-      // A load() is already running (e.g. from a prior rapid generation bump):
-      // skip launching an overlapping one. The watch on `original` will adopt
-      // the generation that load() actually fetched, so we do not stamp this
-      // (possibly already-superseded) generation over it.
-      if (pending.value) return
-      // Adopt the new generation synchronously as our If-Match token *before*
-      // awaiting load(), so two rapid changes cannot interleave and leave a
-      // stale generation stamped after the fetch completes.
-      loadedGeneration.value = generation
-      void load()
-    } else {
-      // Local edits in flight: warn rather than clobber the user's work.
-      stale.value = true
-    }
+  // Authoritative If-Match stamp. The orchestrator (useConfigEditor) calls this
+  // with the server generation observed at the most recent successful load, so
+  // submit() always carries the generation that matches the data the user is
+  // editing. Set unconditionally — the orchestrator owns the ordering.
+  const setGeneration = (generation: number) => {
+    loadedGeneration.value = generation
   }
 
-  // Track the generation observed at each load so submit can send If-Match. If
-  // the loaded entity does not itself carry `generation`, the page is expected
-  // to feed it via onGenerationChange.
+  // Track the generation off the loaded entity when it carries one (e.g. a
+  // future read shape with an embedded `generation`). Entities such as the
+  // per-account / per-risk-profile views extracted from EffectiveConfig do NOT
+  // carry a `generation` field, so this watch never fires for them; those pages
+  // must stamp the generation explicitly via setGeneration() (see
+  // useConfigEditor), which is the authoritative path.
   watch(original, () => {
     const fromEntity = readGeneration(original.value)
     if (fromEntity !== undefined) loadedGeneration.value = fromEntity
@@ -280,7 +278,7 @@ export function useConfigForm<T>(options: UseConfigFormOptions<T>): UseConfigFor
     discard,
     submit,
     errorFor,
-    onGenerationChange
+    setGeneration
   }
 }
 
