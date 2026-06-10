@@ -1918,6 +1918,370 @@ fn intrabar_validation_instance() -> InstanceConfig {
     }
 }
 
+// Modeled on config/bots/crypto-5m-sma-crossover-paper.toml at the repo root.
+const WRITING_INSTANCE_FIXTURE: &str = r#"# Strategy bot definition
+id = "bot-writing"
+enabled = true # toggled by ops
+market = "crypto"
+symbols = ["BTCUSDT", "ETHUSDT"]
+timeframe = "5m"
+account = "binance-demo"
+data_connector = "binance"
+execution_connector = "binance"
+strategy = "single_indicator_signal"
+signal_mode = "confirmed_only"
+polling_enabled = true
+polling_interval_ms = 1000
+
+[[indicators]]
+id = "trend-1"
+type = "sma_crossover"
+signal_policy = "confirmed_required"
+
+[indicators.params]
+fast_length = 10
+slow_length = 30
+
+[budget]
+pct = 10.0
+
+[risk]
+profile = "crypto-default"
+
+[risk.overrides]
+stale_data_ms = 30000
+"#;
+
+// Modeled on config/openticker.toml at the repo root.
+const WRITING_GLOBAL_FIXTURE: &str = r#"# Service-wide settings
+[service]
+environment = "dev"
+data_dir = "./var"
+bot_dir = "./config/bots"
+
+[http]
+enabled = true
+bind = "127.0.0.1:8080"
+request_log = true
+openapi_enabled = true
+openapi_path = "/openapi.json"
+
+[storage]
+kind = "sqlite"
+path = "./var/openticker.db"
+busy_timeout_ms = 5000
+prune_removed_bots_on_startup = true
+
+[observability]
+log_level = "info"
+metrics_enabled = true
+metrics_path = "/metrics"
+
+[safety]
+require_explicit_live_enable = true
+default_start_paused_if_recovery_uncertain = true
+
+[data_plane]
+default_polling_interval_ms = 5000
+default_retention = 500
+"#;
+
+#[test]
+fn render_updated_document_preserves_comments_and_unrelated_keys() {
+    let mut next: InstanceConfig =
+        toml::from_str(WRITING_INSTANCE_FIXTURE).expect("fixture should parse");
+    next.budget.pct = 25.0;
+
+    let rendered =
+        render_updated_document(WRITING_INSTANCE_FIXTURE, &next).expect("document should render");
+
+    assert!(rendered.contains("# Strategy bot definition"));
+    assert!(rendered.contains("enabled = true # toggled by ops"));
+    assert!(rendered.contains(r#"symbols = ["BTCUSDT", "ETHUSDT"]"#));
+    assert!(rendered.contains("polling_interval_ms = 1000"));
+    assert!(rendered.contains("pct = 25.0"));
+    assert!(!rendered.contains("pct = 10.0"));
+}
+
+#[test]
+fn render_updated_document_removes_dropped_keys() {
+    let mut next: InstanceConfig =
+        toml::from_str(WRITING_INSTANCE_FIXTURE).expect("fixture should parse");
+    assert_eq!(next.risk.overrides.stale_data_ms, Some(30_000));
+    next.risk.overrides.stale_data_ms = None;
+
+    let rendered =
+        render_updated_document(WRITING_INSTANCE_FIXTURE, &next).expect("document should render");
+
+    assert!(!rendered.contains("stale_data_ms"));
+    let reparsed: InstanceConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(reparsed.risk.overrides.stale_data_ms, None);
+}
+
+#[test]
+fn render_updated_document_keeps_absent_default_keys_absent() {
+    let raw = WRITING_INSTANCE_FIXTURE
+        .replace("polling_enabled = true\n", "")
+        .replace("polling_interval_ms = 1000\n", "");
+    let mut next: InstanceConfig = toml::from_str(&raw).expect("fixture should parse");
+    assert!(next.polling_enabled);
+    assert_eq!(next.polling_interval_ms, 1_000);
+    next.budget.pct = 42.5;
+
+    let rendered = render_updated_document(&raw, &next).expect("document should render");
+
+    assert!(!rendered.contains("polling_enabled"));
+    assert!(!rendered.contains("polling_interval_ms"));
+    assert!(rendered.contains("pct = 42.5"));
+}
+
+#[test]
+fn render_updated_document_replaces_changed_indicators() {
+    let mut next: InstanceConfig =
+        toml::from_str(WRITING_INSTANCE_FIXTURE).expect("fixture should parse");
+    next.indicators[0]
+        .params
+        .insert("fast_length".to_owned(), toml::Value::Integer(12));
+    let mut second = next.indicators[0].clone();
+    second.id = "trend-2".to_owned();
+    second.indicator_type = "rsi_threshold".to_owned();
+    next.indicators.push(second);
+
+    let rendered =
+        render_updated_document(WRITING_INSTANCE_FIXTURE, &next).expect("document should render");
+
+    assert_eq!(rendered.matches("[[indicators]]").count(), 2);
+    let reparsed: InstanceConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(reparsed.indicators.len(), 2);
+    assert_eq!(
+        reparsed.indicators[0].params.get("fast_length"),
+        Some(&toml::Value::Integer(12))
+    );
+    assert_eq!(reparsed.indicators[1].id, "trend-2");
+    assert_eq!(reparsed.indicators[1].indicator_type, "rsi_threshold");
+}
+
+#[test]
+fn render_updated_document_round_trips_realistic_configs() {
+    let mut next_instance: InstanceConfig =
+        toml::from_str(WRITING_INSTANCE_FIXTURE).expect("instance fixture should parse");
+    next_instance.symbols = vec!["BTCUSDT".to_owned(), "SOLUSDT".to_owned()];
+    next_instance.polling_interval_ms = 2_000;
+    next_instance.warmup_target_bars = Some(120);
+    next_instance.risk.overrides.max_open_positions = Some(3);
+
+    let rendered = render_updated_document(WRITING_INSTANCE_FIXTURE, &next_instance)
+        .expect("instance document should render");
+    let reparsed: InstanceConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(
+        serde_json::to_value(&reparsed).expect("reparsed should serialize"),
+        serde_json::to_value(&next_instance).expect("next should serialize")
+    );
+
+    let mut next_global: GlobalConfig =
+        toml::from_str(WRITING_GLOBAL_FIXTURE).expect("global fixture should parse");
+    next_global.http.request_log = false;
+    next_global.storage.busy_timeout_ms = 7_500;
+    next_global
+        .data_plane
+        .watchlist
+        .push(DataPlaneWatchlistEntry {
+            account: "binance-demo".to_owned(),
+            symbol: "BTCUSDT".to_owned(),
+            timeframe: Timeframe::M5,
+            polling_interval_ms: Some(10_000),
+            retention: None,
+        });
+
+    let rendered = render_updated_document(WRITING_GLOBAL_FIXTURE, &next_global)
+        .expect("global document should render");
+    assert!(rendered.contains("# Service-wide settings"));
+    let reparsed: GlobalConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(
+        serde_json::to_value(&reparsed).expect("reparsed should serialize"),
+        serde_json::to_value(&next_global).expect("next should serialize")
+    );
+}
+
+#[test]
+fn render_new_document_round_trips() {
+    let value: InstanceConfig =
+        toml::from_str(WRITING_INSTANCE_FIXTURE).expect("fixture should parse");
+
+    let rendered = render_new_document(&value).expect("document should render");
+
+    let reparsed: InstanceConfig = toml::from_str(&rendered).expect("rendered should parse");
+    assert_eq!(
+        serde_json::to_value(&reparsed).expect("reparsed should serialize"),
+        serde_json::to_value(&value).expect("value should serialize")
+    );
+}
+
+#[test]
+fn write_atomic_leaves_only_target_file() {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("openticker-config-write-atomic-{timestamp}"));
+    fs::create_dir_all(&dir).expect("temp dir should be created");
+
+    let target = dir.join("bot-writing.toml");
+    write_atomic(&target, WRITING_INSTANCE_FIXTURE).expect("write should succeed");
+
+    let raw = fs::read_to_string(&target).expect("target should be readable");
+    let reparsed: InstanceConfig = toml::from_str(&raw).expect("target should parse");
+    assert_eq!(reparsed.id, "bot-writing");
+
+    // Overwriting an existing file must also work and leave no temp file behind.
+    write_atomic(
+        &target,
+        &WRITING_INSTANCE_FIXTURE.replace("pct = 10.0", "pct = 20.0"),
+    )
+    .expect("overwrite should succeed");
+    let raw = fs::read_to_string(&target).expect("target should be readable");
+    let reparsed: InstanceConfig = toml::from_str(&raw).expect("target should parse");
+    assert!((reparsed.budget.pct - 20.0).abs() < f64::EPSILON);
+
+    let entries: Vec<String> = fs::read_dir(&dir)
+        .expect("temp dir should be listable")
+        .map(|entry| {
+            entry
+                .expect("entry should be readable")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(entries, vec!["bot-writing.toml".to_owned()]);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn load_sources_from_dir_maps_entities_by_parsed_id() {
+    let fixture_dir = create_fixture_dir("sources-by-id");
+
+    write_file(
+        fixture_dir.join("openticker.toml"),
+        r#"
+[service]
+environment = "dev"
+data_dir = "./var"
+bot_dir = "./bots"
+
+[http]
+enabled = true
+bind = "127.0.0.1:8080"
+request_log = true
+openapi_enabled = true
+openapi_path = "/openapi.json"
+
+[storage]
+kind = "sqlite"
+path = "./var/openticker.db"
+busy_timeout_ms = 5000
+
+[observability]
+log_level = "info"
+metrics_enabled = true
+metrics_path = "/metrics"
+
+[safety]
+require_explicit_live_enable = true
+default_start_paused_if_recovery_uncertain = true
+"#,
+    );
+
+    write_file(
+        fixture_dir.join("accounts").join("weird-account-name.toml"),
+        r#"
+id = "real-account-id"
+kind = "binance"
+mode = "paper"
+use_demo_mode = true
+api_key_env = "PATH"
+api_secret_env = "PATH"
+total_budget_usd = 20000.0
+"#,
+    );
+
+    write_file(
+        fixture_dir.join("risk").join("weird-risk-name.toml"),
+        r#"
+id = "real-risk-id"
+max_daily_loss_pct = 2.0
+max_open_positions = 5
+max_order_notional_usd = 2500.0
+max_spread_bps = 20
+max_slippage_bps = 30
+stale_data_ms = 3000
+cooldown_after_reject_ms = 15000
+"#,
+    );
+
+    write_file(
+        fixture_dir.join("bots").join("weird-name.toml"),
+        r#"
+id = "real-id"
+enabled = true
+market = "crypto"
+symbols = ["BTCUSDT"]
+timeframe = "5m"
+account = "real-account-id"
+data_connector = "binance"
+execution_connector = "binance"
+strategy = "single_indicator_signal"
+signal_mode = "confirmed_only"
+
+[[indicators]]
+id = "trend-1"
+type = "sma_crossover"
+
+[indicators.params]
+fast_length = 10
+slow_length = 30
+
+[budget]
+pct = 100.0
+
+[risk]
+profile = "real-risk-id"
+"#,
+    );
+
+    let sources = load_sources_from_dir(&fixture_dir).expect("sources should load");
+
+    assert_eq!(sources.config_dir, fixture_dir);
+    assert_eq!(sources.bots_dir, fixture_dir.join("bots"));
+
+    let instance = sources
+        .instance_by_id("real-id")
+        .expect("instance should be located by parsed id");
+    assert!(instance.path.ends_with("weird-name.toml"));
+    assert!(instance.raw.contains(r#"id = "real-id""#));
+    assert!(sources.instance_by_id("weird-name").is_none());
+
+    let account = sources
+        .account_by_id("real-account-id")
+        .expect("account should be located by parsed id");
+    assert!(account.path.ends_with("weird-account-name.toml"));
+    assert!(sources.account_by_id("weird-account-name").is_none());
+
+    let risk = sources
+        .risk_profile_by_id("real-risk-id")
+        .expect("risk profile should be located by parsed id");
+    assert!(risk.path.ends_with("weird-risk-name.toml"));
+    assert!(sources.risk_profile_by_id("weird-risk-name").is_none());
+
+    let bundle = sources.to_bundle();
+    assert_eq!(bundle.instances.len(), 1);
+    assert_eq!(bundle.instances[0].id, "real-id");
+    assert_eq!(bundle.accounts.len(), 1);
+    assert_eq!(bundle.accounts[0].id, "real-account-id");
+    assert_eq!(bundle.risk_profiles.len(), 1);
+    assert_eq!(bundle.risk_profiles[0].id, "real-risk-id");
+}
+
 fn create_fixture_dir(prefix: &str) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

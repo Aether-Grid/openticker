@@ -17,11 +17,19 @@ pub enum ConfigError {
     },
     #[error("configuration validation failed: {message}")]
     Validation { message: String },
+    #[error("failed to render TOML: {message}")]
+    Render { message: String },
 }
 
 impl ConfigError {
     pub(crate) fn validation(message: impl Into<String>) -> Self {
         Self::Validation {
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn render(message: impl Into<String>) -> Self {
+        Self::Render {
             message: message.into(),
         }
     }
