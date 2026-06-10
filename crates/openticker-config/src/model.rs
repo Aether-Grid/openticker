@@ -145,6 +145,24 @@ impl AccountConfigUpdate {
     /// the three secret env references from `existing` untouched.
     #[must_use]
     pub fn into_account(self, existing: &AccountConfig) -> AccountConfig {
+        // Resolve `execution_remote_submission` against the existing account.
+        //
+        // The dashboard reads the *resolved* bool from GET /v1/config/effective
+        // and echoes it back as `Some(bool)` on every save (it cannot reconstruct
+        // the original `Option`). If we stored that `Some(bool)` verbatim, a
+        // previously-inherited default (raw `None`) would be materialized into the
+        // account TOML as an explicit `execution_remote_submission = false/true`
+        // line — polluting the file and producing a spurious change-set diff.
+        //
+        // So: only adopt the incoming value when it actually changes the resolved
+        // effective value. Otherwise preserve the existing raw `Option` (keeping a
+        // `None` as `None`) so an inherited default stays inherited.
+        let execution_remote_submission = match self.execution_remote_submission {
+            Some(requested) if requested != existing.execution_remote_submission_enabled() => {
+                Some(requested)
+            }
+            _ => existing.execution_remote_submission,
+        };
         AccountConfig {
             id: existing.id.clone(),
             kind: self.kind,
@@ -154,7 +172,7 @@ impl AccountConfigUpdate {
             passphrase_env: existing.passphrase_env.clone(),
             use_demo_mode: self.use_demo_mode,
             reconciliation_remote_snapshot: self.reconciliation_remote_snapshot,
-            execution_remote_submission: self.execution_remote_submission,
+            execution_remote_submission,
             reconciliation_base_url: self.reconciliation_base_url,
             cash_balance_assets: self.cash_balance_assets,
             total_budget_usd: self.total_budget_usd,

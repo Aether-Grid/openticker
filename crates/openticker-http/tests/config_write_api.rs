@@ -235,6 +235,72 @@ async fn put_account_preserves_secrets_and_redacts_response() {
 }
 
 #[tokio::test]
+async fn put_account_budget_edit_echoing_resolved_remote_submission_succeeds() {
+    // Reproduces the real dashboard flow: the account editor reads the resolved
+    // `execution_remote_submission` bool from GET /v1/config/effective and echoes
+    // it back on save (it cannot reconstruct the original `Option`). The fixture
+    // account leaves `execution_remote_submission` unset (`None`) on disk, so the
+    // resolved value is `false`. A budget-only edit must NOT be rejected as a
+    // settings change, and must NOT materialize an `execution_remote_submission`
+    // line into the account TOML.
+    let (_guard, dir) = common::fixture_config_dir("put-account-resolved-remote");
+    let app = app_for(&dir);
+    let account_path = dir.join("accounts").join("alpaca-paper.toml");
+
+    // Sanity: the fixture account starts with no materialized submission flag.
+    let before = fs::read_to_string(&account_path).unwrap();
+    assert!(
+        !before.contains("execution_remote_submission"),
+        "fixture account must start without a materialized submission flag: {before}"
+    );
+
+    // Read the resolved account exactly as the UI does.
+    let effective = get_json(&app, "/v1/config/effective").await;
+    let account = &effective["accounts"][0];
+    let resolved_submission = account["execution_remote_submission"]
+        .as_bool()
+        .expect("effective account should carry a resolved submission bool");
+    assert!(
+        !resolved_submission,
+        "fixture resolves submission to false: {account}"
+    );
+
+    // Build the save body the way the UI would: every field echoed back from the
+    // effective account, with only the budget changed and the *resolved* bool
+    // sent for execution_remote_submission.
+    let body = json!({
+        "kind": account["kind"],
+        "mode": account["mode"],
+        "use_demo_mode": account["use_demo_mode"],
+        "reconciliation_remote_snapshot": account["reconciliation_remote_snapshot"],
+        "execution_remote_submission": resolved_submission,
+        "reconciliation_base_url": account["reconciliation_base_url"],
+        "cash_balance_assets": account["cash_balance_assets"],
+        "total_budget_usd": 31_000.0,
+    });
+
+    let (status, response_text) =
+        send_json(&app, "PUT", "/v1/config/accounts/alpaca-paper", &body, None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "budget-only edit echoing the resolved submission bool must not 409: {response_text}"
+    );
+
+    // The budget actually changed on disk.
+    let after = fs::read_to_string(&account_path).unwrap();
+    let on_disk: toml::Value = toml::from_str(&after).unwrap();
+    assert_eq!(on_disk["total_budget_usd"].as_float(), Some(31_000.0));
+
+    // The budget-only edit must not have polluted the file with an inherited
+    // default for execution_remote_submission.
+    assert!(
+        !after.contains("execution_remote_submission"),
+        "budget-only edit must not materialize an inherited submission flag: {after}"
+    );
+}
+
+#[tokio::test]
 async fn put_account_unknown_id_returns_not_found() {
     let (_guard, dir) = common::fixture_config_dir("put-account-unknown");
     let app = app_for(&dir);

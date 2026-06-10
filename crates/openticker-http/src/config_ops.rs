@@ -168,7 +168,13 @@ fn collect_account_violations(
             || old_account.use_demo_mode != new_account.use_demo_mode
             || old_account.reconciliation_remote_snapshot
                 != new_account.reconciliation_remote_snapshot
-            || old_account.execution_remote_submission != new_account.execution_remote_submission
+            // Compare the *resolved* effective value, not the raw `Option<bool>`.
+            // The dashboard reads the resolved bool from GET /v1/config/effective
+            // and echoes it back as `Some(bool)`; comparing raw Options would flag
+            // a previously-unset (`None`) field as changed on every save, a spurious
+            // `account_settings_changed` 409. A no-op resolved value must not trip it.
+            || old_account.execution_remote_submission_enabled()
+                != new_account.execution_remote_submission_enabled()
             || old_account.reconciliation_base_url != new_account.reconciliation_base_url
         {
             violations.push(ReloadViolation {
