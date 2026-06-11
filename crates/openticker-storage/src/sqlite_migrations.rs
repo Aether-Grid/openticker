@@ -265,6 +265,9 @@ CREATE TABLE IF NOT EXISTS bot_snapshots (
 );
 ";
 
+// Additive idempotent schema statements (CREATE … IF NOT EXISTS) do NOT
+// require a version bump: the batch re-runs on every open and is a no-op
+// when the objects already exist.
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 pub(crate) fn run(connection: &mut Connection) -> Result<(), StorageError> {

@@ -276,6 +276,27 @@ pub struct IndicatorInstanceConfig {
     pub weight: Option<f64>,
     #[serde(default)]
     pub metadata_filters: IndicatorSignalMetadataFilters,
+    /// Raw, per-indicator parameter table copied verbatim from the TOML
+    /// `[indicators.params]` section.
+    ///
+    /// # Validation contract
+    ///
+    /// The only structural guarantee enforced here is that this is a TOML
+    /// table: the `toml::Table` type rejects any non-table value (e.g. a
+    /// scalar or array) at deserialization time, and a missing section
+    /// defaults to an empty table. The *shape and types of the keys are NOT
+    /// validated by [`ConfigBundle::validate`](crate::ConfigBundle::validate)*,
+    /// because the per-indicator parameter schemas live in the indicator crate
+    /// (behind the `indicators` feature) and are not available here without a
+    /// dependency cycle.
+    ///
+    /// Consumers MUST treat these params as untrusted input and validate them
+    /// before use. The canonical validation point is
+    /// `openticker_registry::build_engine`, whose per-indicator `build`
+    /// functions parse and range-check every key, returning an
+    /// `IndicatorBuildError` on any malformed value. Code that reads params
+    /// directly (rather than building an engine) must never assume a key is
+    /// present or has a particular type.
     #[serde(default)]
     pub params: toml::Table,
 }

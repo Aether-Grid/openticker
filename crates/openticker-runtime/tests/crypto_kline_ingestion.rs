@@ -92,7 +92,16 @@ fn intrabar_preview_updates_submit_orders_when_preview_is_allowed() {
     let mut runtime = Runtime::from_config(&config);
     runtime.start_instance("btcusdt").unwrap();
 
-    let warmup_end_index = warmup_with_confirmed_flat_bars(&mut runtime, 0, 60, 42_000.0);
+    // Warm up with a mild *declining* trend so the committed fast SMA settles
+    // strictly below the committed slow SMA. Previously this test warmed up with
+    // perfectly flat bars, which left the fast and slow SMAs exactly equal; under
+    // the old `<=`/`>=` crossover semantics any subsequent move was flagged as a
+    // cross, so a preview rally produced a (spurious) buy. With the corrected
+    // strict semantics, an equal-previous state is not a cross, so the test must
+    // establish a genuine fast-below-slow state for a real crossover to occur on
+    // the rally. (Preview evaluation runs on a *clone* of the indicator, so every
+    // preview bar is compared against this committed warmup state.)
+    let warmup_end_index = warmup_with_confirmed_declining_bars(&mut runtime, 0, 60, 42_300.0, 5.0);
     assert!(runtime.get_instance("btcusdt").unwrap().warmup.ready);
 
     let orders_before = runtime.recent_orders(200).unwrap().len();
@@ -252,6 +261,34 @@ fn warmup_with_confirmed_flat_bars(
 ) -> usize {
     let mut stream_index = start_index;
     for _ in 0..bars {
+        let payload =
+            binance_kline_payload("BTCUSDT", stream_open_time_ms(stream_index), close, true);
+        let outcomes = runtime
+            .process_market_stream_payload("btcusdt", &payload)
+            .unwrap();
+        assert!(!outcomes.is_empty());
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| outcome.phase == SignalPhase::Confirmed)
+        );
+        stream_index += 1;
+    }
+
+    stream_index
+}
+
+fn warmup_with_confirmed_declining_bars(
+    runtime: &mut Runtime,
+    start_index: usize,
+    bars: usize,
+    start_close: f64,
+    step: f64,
+) -> usize {
+    let mut stream_index = start_index;
+    let mut close = start_close;
+    for _ in 0..bars {
+        close -= step;
         let payload =
             binance_kline_payload("BTCUSDT", stream_open_time_ms(stream_index), close, true);
         let outcomes = runtime

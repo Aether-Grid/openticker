@@ -1102,6 +1102,11 @@ pub trait LanePollingEngine {
 
     fn ensure_kill_switch_inactive(&self) -> Result<(), Self::Error>;
     fn polling_context(&self, instance_id: &str) -> Result<LanePollingContext, Self::Error>;
+    /// Builds an engine-specific error describing a lane invariant violation
+    /// detected during polling (e.g. a `CatchingUp` lane without a recovery
+    /// target). The polling loop runs where callers cannot catch a panic, so
+    /// such invariant breaks are surfaced as recoverable errors instead.
+    fn invariant_violation(&self, instance_id: &str, reason: &str) -> Self::Error;
     fn replay_confirmed_bar(
         &mut self,
         instance_id: &str,
@@ -1664,6 +1669,27 @@ pub fn sync_runtime_fields_from_inventory(
     instance: &mut LaneRuntime,
     valuation_price: Option<f64>,
 ) {
+    // Capture the *incoming* (pre-sync) state before any field is overwritten.
+    // The genuine state-consistency anomaly this boundary guards against is a
+    // lane that arrived here claiming `has_position == true` while BOTH of its
+    // effective quantity sources (the ledger inventory and the cached
+    // `position_quantity` field) are within tolerance of zero. That divergence
+    // can be produced across the public boundary — e.g. a reconciliation
+    // assessment that resolves `has_position = true` together with a ~0
+    // resolved quantity (see `openticker-runtime`
+    // `apply_reconciliation_assessment_state`). That assessment persists the
+    // divergent fields on the lane; the anomaly is then observed here at the
+    // next fill-driven sync. It is exactly the scenario that previously caused
+    // `effective_position_quantity` to fabricate a quantity. Detecting it here, at the single sync boundary, lets that
+    // accessor stay a clean, side-effect-free `0.0` fallback while still
+    // surfacing the anomaly.
+    let pre_sync_has_position = instance.has_position;
+    let pre_sync_inventory_quantity = instance.inventory.quantity();
+    let pre_sync_cached_quantity = instance.position_quantity;
+    let inconsistent_on_entry = pre_sync_has_position
+        && pre_sync_inventory_quantity <= POSITION_QUANTITY_TOLERANCE
+        && pre_sync_cached_quantity <= POSITION_QUANTITY_TOLERANCE;
+
     instance.position_quantity = instance.inventory.quantity();
     instance.has_position = instance.position_quantity > POSITION_QUANTITY_TOLERANCE;
     instance.entry_price = instance.inventory.average_cost_usd();
@@ -1677,6 +1703,40 @@ pub fn sync_runtime_fields_from_inventory(
     } else {
         0.0
     };
+
+    // Record the anomaly through a release-visible channel. `recovery_last_error`
+    // is the idiomatic structured lane-state marker for an operator-facing
+    // anomaly: it surfaces to runtime recovery summaries (see `openticker-runtime`
+    // `repo::summaries`) and is the same field `mark_lane_out_of_sync_state`
+    // writes. We record it once, here, at the detection point — the read-only
+    // `effective_position_quantity` accessor deliberately does NOT re-record, so
+    // the inconsistency has a single coherent story. The sync above has already
+    // collapsed the lane to a coherent flat state (`has_position == false`,
+    // quantity/notional zeroed), so the recovered position is safe; the marker
+    // exists purely so the prior divergence is visible in production, where the
+    // `debug_assert!` below is compiled out.
+    // Last-writer-wins overwrite is intentional: this anomaly is itself a
+    // flat-reset signal, and surfacing it takes precedence over any prior
+    // recovery marker for this cycle.
+    if inconsistent_on_entry {
+        instance.recovery_last_error = Some(format!(
+            "lane position-quantity invariant violated during inventory sync: \
+             account={} instance={} symbol={} had has_position=true while both \
+             quantity sources were ~0 (inventory_quantity={pre_sync_inventory_quantity}, \
+             cached_position_quantity={pre_sync_cached_quantity}); reset to flat",
+            instance.config.account, instance.config.id, instance.lane_symbol,
+        ));
+    }
+    // Invariant the release-visible marker above guards: a synced lane must
+    // never present `has_position == true` alongside a zero effective quantity.
+    // Kept as a debug-only tripwire in addition to the marker, never as the
+    // only signal.
+    debug_assert!(
+        !(instance.has_position && instance.position_quantity <= POSITION_QUANTITY_TOLERANCE),
+        "lane position-quantity invariant violated after sync: has_position={} but position_quantity={}",
+        instance.has_position,
+        instance.position_quantity
+    );
 }
 
 #[must_use]
@@ -1719,15 +1779,35 @@ pub fn accepted_order_fee_entry(order: &AcceptedOrder) -> Option<FeeEntry> {
     })
 }
 
+/// Returns the position quantity the lane should treat as authoritative,
+/// preferring the ledger inventory, then the cached `position_quantity` field.
+///
+/// # Invariant
+///
+/// Whenever `has_position` is true the lane is expected to also carry a
+/// non-zero quantity in either the inventory or the `position_quantity`
+/// field (see `sync_runtime_fields_from_inventory`, where the two are kept in
+/// lockstep). If that invariant is ever violated — `has_position == true`
+/// while both quantity sources are within `POSITION_QUANTITY_TOLERANCE` of
+/// zero — this function deliberately returns `0.0` rather than fabricating a
+/// quantity. Returning a fabricated non-zero value here previously corrupted
+/// downstream position-notional and order-sizing math, so `0.0` is the only
+/// safe answer: it makes notional zero and prevents fabricated sizing. The
+/// inconsistency itself is detected and recorded at the state-sync boundary
+/// (`sync_runtime_fields_from_inventory`, via the release-visible
+/// `recovery_last_error` marker plus a debug-only tripwire), not here, so that
+/// this read-only accessor stays a side-effect-free, panic-free `0.0` fallback
+/// that never double-records the anomaly.
 #[must_use]
 pub fn effective_position_quantity(instance: &LaneRuntime) -> f64 {
     if instance.inventory.quantity() > POSITION_QUANTITY_TOLERANCE {
         instance.inventory.quantity()
     } else if instance.position_quantity > POSITION_QUANTITY_TOLERANCE {
         instance.position_quantity
-    } else if instance.has_position {
-        1.0
     } else {
+        // Defensive: `has_position` may be true here only if the
+        // quantity-consistency invariant was violated upstream. Never
+        // fabricate a quantity; return zero so notional collapses to zero.
         0.0
     }
 }
@@ -1865,12 +1945,19 @@ pub fn validate_recovery_bars(
 /// # Errors
 ///
 /// Propagates any engine error produced while fetching connector data or
-/// applying lane state.
+/// applying lane state. Also returns an engine error (via
+/// [`LanePollingEngine::invariant_violation`]) if the polling context reports
+/// `CatchingUp` without a recovery target: that indicates an internal
+/// invariant violation, and because this runs inside the polling loop where
+/// callers cannot catch a panic, it is surfaced as a recoverable error rather
+/// than aborting the whole loop.
 ///
 /// # Panics
 ///
-/// Panics if the polling context reports `CatchingUp` without a recovery target,
-/// which would indicate an internal invariant violation.
+/// Panics only if the `last_dispatched` timestamp becomes `None` after it has
+/// already been confirmed `Some` earlier in the same call. That is impossible
+/// because `context` is read once and never mutated, so the `expect` is purely
+/// a guard against future refactors.
 #[allow(clippy::too_many_lines)]
 pub fn advance_lane_polling_once<E: LanePollingEngine>(
     engine: &mut E,
@@ -1886,9 +1973,12 @@ where
     let context = engine.polling_context(instance_id)?;
 
     if context.recovery_state == LaneRecoveryState::CatchingUp {
-        let target = context
-            .recovery_target
-            .expect("polling context must include a target while catching up");
+        let Some(target) = context.recovery_target else {
+            return Err(engine.invariant_violation(
+                instance_id,
+                "polling context reported CatchingUp without a recovery target",
+            ));
+        };
         return run_recovery_pages(
             engine,
             instance_id,
@@ -3174,12 +3264,15 @@ pub fn market_data_is_stale(bar: &OhlcvBar, timeframe: Timeframe, stale_data_ms:
 #[cfg(test)]
 mod tests {
     use super::{
-        InstanceWarmupState, LaneManualOpsEngine, LaneRecoveryState, LaneRuntimeState,
-        ManualCloseContext, ManualCloseOutcome, ManualCloseSignalOutcome, ManualCloseSignalRisk,
-        RecoveryStartKind, accepted_order_fee_entry, advance_warmup_state,
-        apply_process_bar_fill_state, close_lane_position, complete_lane_recovery_state,
+        ConfirmedBarPage, ConfirmedBarReplayMode, ConfirmedBarReplayResult, InstanceWarmupState,
+        LaneManualOpsEngine, LanePollingContext, LanePollingEngine, LaneRecoveryState,
+        LaneRuntimeState, ManualCloseContext, ManualCloseOutcome, ManualCloseSignalOutcome,
+        ManualCloseSignalRisk, RecoveryPageApplied, RecoveryStartKind, accepted_order_fee_entry,
+        advance_lane_polling_once, advance_warmup_state, apply_process_bar_fill_state,
+        close_lane_position, complete_lane_recovery_state, effective_position_quantity,
         mark_lane_out_of_sync_state, record_recovery_no_progress_state, record_warmup_failure,
-        start_lane_recovery_state, sync_remote_position_quantity, validate_recovery_bars,
+        start_lane_recovery_state, sync_remote_position_quantity,
+        sync_runtime_fields_from_inventory, validate_recovery_bars,
     };
     use openticker_config::{
         BudgetConfig, ExecutionConstraintsConfig, InstanceConfig, InstanceRiskConfig,
@@ -3479,6 +3572,235 @@ mod tests {
                 ..
             } if (price - 101.0).abs() < 1e-9
         ));
+    }
+
+    #[test]
+    fn effective_position_quantity_never_fabricates_when_quantity_is_zero() {
+        let mut lane = test_lane_runtime();
+        // Inconsistent state: the lane claims a position while both quantity
+        // sources are zero. This previously returned a fabricated `1.0`, which
+        // corrupted notional and order-sizing math downstream.
+        lane.has_position = true;
+        lane.position_quantity = 0.0;
+        lane.inventory = InventoryState::default();
+
+        assert_f64_close(effective_position_quantity(&lane), 0.0);
+
+        // Sanity: a genuine position still reports its real quantity.
+        lane.position_quantity = 2.5;
+        assert_f64_close(effective_position_quantity(&lane), 2.5);
+    }
+
+    #[test]
+    fn sync_runtime_fields_records_inconsistency_via_recovery_last_error() {
+        let mut lane = test_lane_runtime();
+        // Construct the genuinely inconsistent *pre-sync* state that can arise
+        // across the public boundary (e.g. a reconciliation assessment that
+        // resolves `has_position = true` with a ~0 resolved quantity): the lane
+        // claims a position while BOTH effective quantity sources are ~0.
+        lane.has_position = true;
+        lane.position_quantity = 0.0;
+        lane.inventory = InventoryState::default();
+        lane.recovery_last_error = None;
+
+        sync_runtime_fields_from_inventory(&mut lane, Some(100.0));
+
+        // The sync collapses the lane to a coherent flat state ...
+        assert!(!lane.has_position);
+        assert_f64_close(lane.position_quantity, 0.0);
+        assert_f64_close(lane.position_notional_usd, 0.0);
+        // ... and the read-only accessor still refuses to fabricate a quantity.
+        assert_f64_close(effective_position_quantity(&lane), 0.0);
+        // ... while the prior divergence is recorded on a release-visible
+        // channel so an operator can see it in production.
+        let recorded = lane
+            .recovery_last_error
+            .as_deref()
+            .expect("inconsistency should be recorded via recovery_last_error");
+        assert!(
+            recorded.contains("position-quantity invariant violated"),
+            "unexpected recovery_last_error: {recorded}"
+        );
+        assert!(
+            recorded.contains("symbol=AAPL") && recorded.contains("instance=bot-a"),
+            "recovery_last_error should carry debug context: {recorded}"
+        );
+    }
+
+    #[test]
+    fn sync_runtime_fields_leaves_recovery_last_error_clear_when_consistent() {
+        let mut lane = test_lane_runtime();
+        // A genuine flat lane (no claimed position, zero quantity) is NOT an
+        // inconsistency and must not be flagged.
+        lane.recovery_last_error = None;
+        sync_runtime_fields_from_inventory(&mut lane, Some(100.0));
+        assert!(
+            lane.recovery_last_error.is_none(),
+            "a consistent flat lane must not flag an invariant violation"
+        );
+
+        // A lane that closes out normally (cached quantity still non-zero at
+        // entry while inventory has zeroed) is the expected close transition,
+        // not the both-sources-zero anomaly, so it must not be flagged either.
+        lane.has_position = true;
+        lane.position_quantity = 3.0;
+        lane.inventory = InventoryState::default();
+        lane.recovery_last_error = None;
+        sync_runtime_fields_from_inventory(&mut lane, Some(100.0));
+        assert!(
+            lane.recovery_last_error.is_none(),
+            "a normal close (cached quantity non-zero at entry) is not an anomaly"
+        );
+    }
+
+    #[derive(Default)]
+    struct StubPollingEngine {
+        context: Option<LanePollingContext>,
+    }
+
+    impl LanePollingEngine for StubPollingEngine {
+        type Error = String;
+        type Outcome = ();
+
+        fn ensure_kill_switch_inactive(&self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn polling_context(&self, _instance_id: &str) -> Result<LanePollingContext, Self::Error> {
+            self.context
+                .clone()
+                .ok_or_else(|| "no polling context configured".to_owned())
+        }
+
+        fn invariant_violation(&self, instance_id: &str, reason: &str) -> Self::Error {
+            format!("invariant violation for `{instance_id}`: {reason}")
+        }
+
+        fn replay_confirmed_bar(
+            &mut self,
+            _instance_id: &str,
+            _bar: &OhlcvBar,
+            _mode: ConfirmedBarReplayMode,
+        ) -> Result<ConfirmedBarReplayResult<Self::Outcome>, Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn fetch_latest_bar(
+            &mut self,
+            _instance_id: &str,
+            _account_id: &str,
+            _data_connector: &str,
+            _symbol: &str,
+            _timeframe: Timeframe,
+        ) -> Result<OhlcvBar, Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn fetch_latest_confirmed_bar_timestamp(
+            &mut self,
+            _instance_id: &str,
+            _account_id: &str,
+            _data_connector: &str,
+            _symbol: &str,
+            _timeframe: Timeframe,
+        ) -> Result<Option<chrono::DateTime<chrono::Utc>>, Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn fetch_confirmed_bars_range(
+            &mut self,
+            _instance_id: &str,
+            _account_id: &str,
+            _data_connector: &str,
+            _symbol: &str,
+            _timeframe: Timeframe,
+            _start_after: Option<chrono::DateTime<chrono::Utc>>,
+            _end_at: chrono::DateTime<chrono::Utc>,
+            _limit: usize,
+        ) -> Result<ConfirmedBarPage, Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn start_lane_recovery(
+            &mut self,
+            _instance_id: &str,
+            _target: chrono::DateTime<chrono::Utc>,
+            _now_ms: i64,
+        ) -> Result<(), Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn complete_lane_recovery(
+            &mut self,
+            _instance_id: &str,
+            _reason: &str,
+        ) -> Result<(), Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn mark_lane_out_of_sync(
+            &mut self,
+            _instance_id: &str,
+            _reason: &str,
+        ) -> Result<(), Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn last_dispatched_bar_timestamp(
+            &self,
+            _instance_id: &str,
+        ) -> Result<Option<chrono::DateTime<chrono::Utc>>, Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn apply_recovery_page(
+            &mut self,
+            _instance_id: &str,
+            _bars: &[OhlcvBar],
+        ) -> Result<usize, Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn record_recovery_page_applied(
+            &mut self,
+            _instance_id: &str,
+            _detail: RecoveryPageApplied,
+        ) -> Result<(), Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn record_recovery_no_progress(
+            &mut self,
+            _instance_id: &str,
+            _target: chrono::DateTime<chrono::Utc>,
+            _exhausted: bool,
+        ) -> Result<(), Self::Error> {
+            unimplemented!("not exercised by this test")
+        }
+    }
+
+    #[test]
+    fn advance_lane_polling_once_returns_err_when_catching_up_without_target() {
+        let mut engine = StubPollingEngine {
+            context: Some(LanePollingContext {
+                account_id: "acct".to_owned(),
+                data_connector: "paper".to_owned(),
+                symbol: "AAPL".to_owned(),
+                timeframe: Timeframe::M1,
+                // Invariant violation: CatchingUp with no recovery target.
+                recovery_state: LaneRecoveryState::CatchingUp,
+                last_dispatched: None,
+                recovery_target: None,
+            }),
+        };
+
+        let result = advance_lane_polling_once(&mut engine, "bot-a", 2, 4, 0);
+        let error =
+            result.expect_err("missing recovery target must surface as an error, not a panic");
+        assert!(
+            error.contains("CatchingUp without a recovery target"),
+            "unexpected error message: {error}"
+        );
     }
 
     #[derive(Debug)]

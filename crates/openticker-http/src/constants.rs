@@ -1,6 +1,7 @@
 use include_dir::{Dir, include_dir};
 use serde_json::json;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 pub const HEALTH_PATH: &str = "/healthz";
 pub const READY_PATH: &str = "/readyz";
@@ -72,6 +73,14 @@ pub(crate) const DASHBOARD_SNAPSHOT_DEFAULT_LIMIT: usize = 60;
 pub(crate) const BOT_SNAPSHOT_TIMELINE_LIMIT: usize = 80;
 pub(crate) const BOT_SNAPSHOT_ORDERS_LIMIT: usize = 500;
 pub(crate) const BOT_SNAPSHOT_POSITIONS_LIMIT: usize = 120;
+
+/// Hard upper bound applied to every caller-supplied `limit` query parameter.
+pub(crate) const MAX_QUERY_LIMIT: usize = 1_000;
+/// Maximum accepted request body size (1 MB) for all endpoints.
+pub(crate) const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+/// Upper bound on how long a handler waits for a blocking storage query
+/// before answering 503; a hung database must not stall handlers forever.
+pub(crate) const BLOCKING_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HttpRouteDescriptor {

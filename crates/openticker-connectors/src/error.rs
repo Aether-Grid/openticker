@@ -33,6 +33,13 @@ pub enum ConnectorError {
     PreviewStream { kind: ConnectorKind, detail: String },
     #[error("connector `{kind:?}` cannot fetch remote snapshot: {detail}")]
     RemoteSnapshot { kind: ConnectorKind, detail: String },
+    #[error("connector `{kind:?}` is rate limited: {detail}")]
+    RateLimited {
+        kind: ConnectorKind,
+        /// Time until the provider expects requests to resume, when reported.
+        retry_after_ms: Option<u64>,
+        detail: String,
+    },
     #[error("connector `{kind:?}` is `{state:?}` and cannot serve reconciliation state")]
     Unavailable {
         kind: ConnectorKind,

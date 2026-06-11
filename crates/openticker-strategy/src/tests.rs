@@ -154,6 +154,34 @@ fn consensus_maps_primary_vote_to_open_long() {
 }
 
 #[test]
+fn consensus_new_accepts_valid_thresholds() {
+    let strategy = ConsensusLongOnlyStrategy::new(2.0, 1.5).expect("valid thresholds");
+    assert!((strategy.entry_threshold - 2.0).abs() < f64::EPSILON);
+    assert!((strategy.exit_threshold - 1.5).abs() < f64::EPSILON);
+
+    // Zero is a valid (boundary) threshold.
+    assert!(ConsensusLongOnlyStrategy::new(0.0, 0.0).is_ok());
+}
+
+#[test]
+fn consensus_new_rejects_negative_entry_threshold() {
+    let result = ConsensusLongOnlyStrategy::new(-0.1, 1.0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn consensus_new_rejects_negative_exit_threshold() {
+    let result = ConsensusLongOnlyStrategy::new(1.0, -1.0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn consensus_new_rejects_non_finite_thresholds() {
+    assert!(ConsensusLongOnlyStrategy::new(f64::NAN, 1.0).is_err());
+    assert!(ConsensusLongOnlyStrategy::new(1.0, f64::INFINITY).is_err());
+}
+
+#[test]
 fn consensus_buy_requires_threshold_not_just_positive_score() {
     let mut strategy = ConsensusLongOnlyStrategy {
         entry_threshold: 1.0,

@@ -64,6 +64,8 @@ pub enum ServiceError {
     },
     #[error("invalid service configuration: {0}")]
     InvalidConfiguration(String),
+    #[error("ledger invariant violation: {detail}")]
+    LedgerInvariantViolation { detail: String },
     #[error("data error: {0}")]
     Data(#[from] DataError),
     #[error("execution error: {0}")]

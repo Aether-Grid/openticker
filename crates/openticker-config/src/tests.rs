@@ -4,7 +4,7 @@ use openticker_core::{
     MarketType, Timeframe,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Table;
 
@@ -231,6 +231,49 @@ profile = "equities-default"
     let effective = bundle.effective_config();
     assert!(effective.accounts[0].secret_status.api_key_present);
     assert!(effective.accounts[0].secret_status.api_secret_present);
+}
+
+#[test]
+fn malformed_dotenv_in_config_dir_fails_loudly() {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let config_dir =
+        std::env::temp_dir().join(format!("openticker-config-dotenv-malformed-{timestamp}"));
+    fs::create_dir_all(&config_dir).expect("config dir should be created");
+
+    // A line with no `=` is a parse error for dotenvy (not a NotFound IO error),
+    // so loading must surface it rather than silently leaving secrets unset.
+    write_file(config_dir.join(".env"), "THIS LINE HAS NO EQUALS SIGN\n");
+
+    let result = load_from_dir(&config_dir);
+    let error = result.expect_err("malformed .env should fail to load");
+    assert!(
+        matches!(error, ConfigError::Dotenv { .. }),
+        "expected ConfigError::Dotenv, got: {error:?}"
+    );
+
+    fs::remove_dir_all(&config_dir).ok();
+}
+
+#[test]
+fn classify_dotenv_result_treats_not_found_as_benign() {
+    let not_found = dotenvy::Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound));
+    assert!(
+        crate::loading::classify_dotenv_result(Path::new("/tmp/.env"), Err(not_found)).is_ok(),
+        "a NotFound dotenv error should be treated as benign (optional file)"
+    );
+}
+
+#[test]
+fn classify_dotenv_result_propagates_other_errors() {
+    let permission_denied =
+        dotenvy::Error::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    let result =
+        crate::loading::classify_dotenv_result(Path::new("/tmp/.env"), Err(permission_denied));
+    let error = result.expect_err("a non-NotFound dotenv error must propagate");
+    assert!(matches!(error, ConfigError::Dotenv { .. }));
 }
 
 #[test]

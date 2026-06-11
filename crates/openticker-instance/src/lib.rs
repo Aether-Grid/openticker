@@ -112,6 +112,10 @@ pub fn build_runtime_indicators(
         let signal_policy = indicator
             .signal_policy
             .unwrap_or(default_signal_policy(instance.signal_mode));
+        // Instance-level `ConfirmedOnly` is a hard override: it forces
+        // `ConfirmedRequired` regardless of any per-indicator `PreviewAllowed`
+        // policy. This is intentional so the instance-wide confirmed-only
+        // contract cannot be weakened by an individual indicator's setting.
         let signal_policy = if matches!(instance.signal_mode, SignalMode::ConfirmedOnly) {
             IndicatorSignalPolicy::ConfirmedRequired
         } else {

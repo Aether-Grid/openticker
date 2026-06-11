@@ -6,9 +6,11 @@ use crate::{
     ConnectorPrivateAccountEvent, ConnectorPrivateBalance, ConnectorPrivateStream,
     ConnectorPrivateStreamEvent, ConnectorReconcile, ConnectorResiliencePolicy,
     ConnectorResilienceState, ConnectorRuntimeControl, ConnectorStatus, ConnectorSymbolConstraints,
-    ConnectorSymbolConstraintsLookup, PreviewStreamConnectionState, StubConnector,
+    ConnectorSymbolConstraintsLookup, PREVIEW_STREAM_COMMAND_CAPACITY,
+    PREVIEW_STREAM_EVENT_CAPACITY, PreviewStreamConnectionState, StubConnector,
     default_blocking_http_client, descriptor_for, deterministic_remote_client_order_id,
-    resolve_secret_env_value, run_in_blocking_thread, unix_now_ms,
+    rate_limit_error, resolve_secret_env_value, retry_after_header, run_in_blocking_thread,
+    sanitize_symbol_for_error, unix_now_ms,
 };
 use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
@@ -33,6 +35,12 @@ const BINANCE_LIVE_BASE_URL: &str = "https://api.binance.com";
 const BINANCE_DEMO_BASE_URL: &str = "https://demo-api.binance.com";
 const BINANCE_ORDER_STATUS_POLL_ATTEMPTS: u8 = 20;
 const BINANCE_ORDER_STATUS_POLL_INTERVAL_MS: u64 = 250;
+/// Upper bound on the order-status polling interval. The interval starts at
+/// [`BINANCE_ORDER_STATUS_POLL_INTERVAL_MS`] and doubles each attempt (capped
+/// here) so a slow-to-fill order backs off instead of polling at a fixed fast
+/// rate. A `429`/`418` response short-circuits the loop entirely because
+/// `fetch_binance_order_status` surfaces [`ConnectorError::RateLimited`].
+const BINANCE_ORDER_STATUS_POLL_MAX_INTERVAL_MS: u64 = 4_000;
 const BINANCE_MAX_QUANTITY_DECIMALS: usize = 8;
 const BINANCE_MAX_QUANTITY_DECIMALS_I32: i32 = 8;
 const BINANCE_QUANTITY_FLOOR_TOLERANCE: f64 = 1e-6;
@@ -197,7 +205,8 @@ impl BinanceConnector {
                 ConnectorError::RemoteSnapshot {
                     kind: ConnectorKind::Binance,
                     detail: format!(
-                        "latest kline response did not include confirmed data for `{symbol}`"
+                        "latest kline response did not include confirmed data for `{}`",
+                        sanitize_symbol_for_error(&symbol)
                     ),
                 }
             })
@@ -314,8 +323,13 @@ impl BinanceConnector {
                 let mut bars = rows
                     .into_iter()
                     .filter_map(|row| match parse_kline_row_with_close_time(&row) {
+                        // A bar is confirmed only when its close time is
+                        // strictly before `now`; a kline closing exactly at
+                        // `now_ms` is still forming. This matches the strict
+                        // `<` comparison in `normalize_recent_binance_klines`
+                        // so both code paths agree on confirmation.
                         Ok((bar, close_time_ms))
-                            if close_time_ms <= now_ms
+                            if close_time_ms < now_ms
                                 && bar.timestamp <= end_at
                                 && start_after.is_none_or(|start| bar.timestamp > start) =>
                         {
@@ -394,7 +408,7 @@ impl BinanceConnector {
 
         run_in_blocking_thread(ConnectorKind::Binance, "binance-submit-order", move || {
             let side_label = binance_order_side_label(side);
-            let quantity = format_binance_quantity(request_quantity);
+            let quantity = format_binance_quantity(request_quantity)?;
             let mut order_payload = submit_binance_market_order(
                 &client,
                 base_url.as_str(),
@@ -426,7 +440,14 @@ impl BinanceConnector {
                     break;
                 }
 
-                std::thread::sleep(Duration::from_millis(BINANCE_ORDER_STATUS_POLL_INTERVAL_MS));
+                // Exponential backoff: double the base interval each attempt up
+                // to the cap so a slow-to-fill order eases off the API instead
+                // of polling at a fixed 250ms. A rate-limit response below
+                // breaks the loop via `?` (RateLimited).
+                let backoff_ms = BINANCE_ORDER_STATUS_POLL_INTERVAL_MS
+                    .saturating_mul(1_u64 << u32::from(attempt).min(16))
+                    .min(BINANCE_ORDER_STATUS_POLL_MAX_INTERVAL_MS);
+                std::thread::sleep(Duration::from_millis(backoff_ms));
                 order_payload = fetch_binance_order_status(
                     &client,
                     base_url.as_str(),
@@ -564,14 +585,14 @@ impl ConnectorMarketStream for BinanceConnector {
     fn start_preview_stream_session(
         &self,
     ) -> Result<Option<ConnectorPreviewStreamSession>, ConnectorError> {
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::channel(PREVIEW_STREAM_COMMAND_CAPACITY);
+        let (event_tx, event_rx) = mpsc::channel(PREVIEW_STREAM_EVENT_CAPACITY);
         let account = self.account.clone();
-        tokio::spawn(run_binance_preview_stream_worker(
+        let worker = tokio::spawn(run_binance_preview_stream_worker(
             account, command_rx, event_tx,
         ));
         Ok(Some(ConnectorPreviewStreamSession::new(
-            command_tx, event_rx,
+            command_tx, event_rx, worker,
         )))
     }
 }
@@ -836,9 +857,15 @@ fn submit_binance_market_order(
     decode_order_submission_json(response, "submit order")
 }
 
-fn format_binance_quantity(value: f64) -> String {
-    if !value.is_finite() || value <= 0.0 {
-        return "0".to_owned();
+fn format_binance_quantity(value: f64) -> Result<String, ConnectorError> {
+    if !value.is_finite() {
+        return Err(ConnectorError::OrderSubmission {
+            kind: ConnectorKind::Binance,
+            detail: format!("order quantity `{value}` is not a finite number"),
+        });
+    }
+    if value <= 0.0 {
+        return Ok("0".to_owned());
     }
 
     let scale = 10_f64.powi(BINANCE_MAX_QUANTITY_DECIMALS_I32);
@@ -851,7 +878,7 @@ fn format_binance_quantity(value: f64) -> String {
     if formatted.ends_with('.') {
         formatted.pop();
     }
-    formatted
+    Ok(formatted)
 }
 
 fn fetch_binance_order_status(
@@ -1204,11 +1231,37 @@ where
         })
 }
 
+/// Emits a preview-stream event without blocking the worker.
+///
+/// Backpressure policy: the event channel is bounded
+/// ([`PREVIEW_STREAM_EVENT_CAPACITY`]). On a full channel the event is dropped
+/// (with a `warn!`) rather than awaited; a stalled consumer therefore loses the
+/// freshest preview update — acceptable for a best-effort market-data preview —
+/// instead of letting the queue grow without bound and risk OOM. A closed
+/// channel (consumer gone) is silently ignored.
+fn emit_preview_event(
+    event_tx: &mpsc::Sender<ConnectorPreviewStreamEvent>,
+    account_id: &str,
+    event: ConnectorPreviewStreamEvent,
+) {
+    if let Err(error) = event_tx.try_send(event) {
+        match error {
+            mpsc::error::TrySendError::Full(_) => {
+                tracing::warn!(
+                    account_id,
+                    "binance preview stream event channel full; dropping event"
+                );
+            }
+            mpsc::error::TrySendError::Closed(_) => {}
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_binance_preview_stream_worker(
     account: ConnectorAccount,
-    mut command_rx: mpsc::UnboundedReceiver<ConnectorPreviewStreamCommand>,
-    event_tx: mpsc::UnboundedSender<ConnectorPreviewStreamEvent>,
+    mut command_rx: mpsc::Receiver<ConnectorPreviewStreamCommand>,
+    event_tx: mpsc::Sender<ConnectorPreviewStreamEvent>,
 ) {
     let mut desired = BTreeSet::new();
     let resilience_policy = BinanceConnector::resilience_policy();
@@ -1225,18 +1278,26 @@ async fn run_binance_preview_stream_worker(
             }
         }
 
-        let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
-            state: PreviewStreamConnectionState::Connecting,
-            detail: None,
-        });
+        emit_preview_event(
+            &event_tx,
+            &account.account_id,
+            ConnectorPreviewStreamEvent::ConnectionState {
+                state: PreviewStreamConnectionState::Connecting,
+                detail: None,
+            },
+        );
 
         match connect_async(BINANCE_MARKET_STREAM_WS_URL).await {
             Ok((mut socket, _)) => {
                 reconnect_failures = 0;
-                let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
-                    state: PreviewStreamConnectionState::Connected,
-                    detail: Some(format!("account={}", account.account_id)),
-                });
+                emit_preview_event(
+                    &event_tx,
+                    &account.account_id,
+                    ConnectorPreviewStreamEvent::ConnectionState {
+                        state: PreviewStreamConnectionState::Connected,
+                        detail: Some(format!("account={}", account.account_id)),
+                    },
+                );
 
                 if let Err(error) = send_binance_subscription_change(
                     &mut socket,
@@ -1246,10 +1307,14 @@ async fn run_binance_preview_stream_worker(
                 )
                 .await
                 {
-                    let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
-                        state: PreviewStreamConnectionState::Disconnected,
-                        detail: Some(error.to_string()),
-                    });
+                    emit_preview_event(
+                        &event_tx,
+                        &account.account_id,
+                        ConnectorPreviewStreamEvent::ConnectionState {
+                            state: PreviewStreamConnectionState::Disconnected,
+                            detail: Some(error.to_string()),
+                        },
+                    );
                 } else {
                     let mut active = desired.clone();
                     let mut reconnect = false;
@@ -1263,7 +1328,7 @@ async fn run_binance_preview_stream_worker(
                                         let to_unsubscribe = active.difference(&next).cloned().collect::<BTreeSet<_>>();
 
                                         if let Err(error) = send_binance_subscription_change(&mut socket, "UNSUBSCRIBE", &to_unsubscribe, &mut request_id).await {
-                                            let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                            emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                                 state: PreviewStreamConnectionState::Disconnected,
                                                 detail: Some(error.to_string()),
                                             });
@@ -1272,7 +1337,7 @@ async fn run_binance_preview_stream_worker(
                                             continue;
                                         }
                                         if let Err(error) = send_binance_subscription_change(&mut socket, "SUBSCRIBE", &to_subscribe, &mut request_id).await {
-                                            let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                            emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                                 state: PreviewStreamConnectionState::Disconnected,
                                                 detail: Some(error.to_string()),
                                             });
@@ -1285,7 +1350,7 @@ async fn run_binance_preview_stream_worker(
                                         active = next;
                                         if active.is_empty() {
                                             let _ = socket.close(None).await;
-                                            let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                            emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                                 state: PreviewStreamConnectionState::Disconnected,
                                                 detail: Some("preview stream idle".to_owned()),
                                             });
@@ -1303,14 +1368,14 @@ async fn run_binance_preview_stream_worker(
                                     Some(Ok(Message::Text(payload))) => {
                                         match normalize_market_data_event_with_subscription(payload.as_str()) {
                                             Ok(Some((subscription, update))) => {
-                                                let _ = event_tx.send(ConnectorPreviewStreamEvent::BarUpdate {
+                                                emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::BarUpdate {
                                                     subscription,
                                                     update,
                                                 });
                                             }
                                             Ok(None) => {}
                                             Err(error) => {
-                                                let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                                emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                                     state: PreviewStreamConnectionState::Disconnected,
                                                     detail: Some(error.to_string()),
                                                 });
@@ -1326,7 +1391,7 @@ async fn run_binance_preview_stream_worker(
                                             || "Binance preview stream closed".to_owned(),
                                             |frame| format!("Binance preview stream closed: {}", frame.reason),
                                         );
-                                        let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                        emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                             state: PreviewStreamConnectionState::Disconnected,
                                             detail: Some(detail),
                                         });
@@ -1334,14 +1399,14 @@ async fn run_binance_preview_stream_worker(
                                     }
                                     Some(Ok(_)) => {}
                                     Some(Err(error)) => {
-                                        let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                        emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                             state: PreviewStreamConnectionState::Disconnected,
                                             detail: Some(format!("Binance preview stream error: {error}")),
                                         });
                                         reconnect = true;
                                     }
                                     None => {
-                                        let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
+                                        emit_preview_event(&event_tx, &account.account_id, ConnectorPreviewStreamEvent::ConnectionState {
                                             state: PreviewStreamConnectionState::Disconnected,
                                             detail: Some("Binance preview stream ended".to_owned()),
                                         });
@@ -1354,10 +1419,14 @@ async fn run_binance_preview_stream_worker(
                 }
             }
             Err(error) => {
-                let _ = event_tx.send(ConnectorPreviewStreamEvent::ConnectionState {
-                    state: PreviewStreamConnectionState::Disconnected,
-                    detail: Some(format!("failed to connect Binance preview stream: {error}")),
-                });
+                emit_preview_event(
+                    &event_tx,
+                    &account.account_id,
+                    ConnectorPreviewStreamEvent::ConnectionState {
+                        state: PreviewStreamConnectionState::Disconnected,
+                        detail: Some(format!("failed to connect Binance preview stream: {error}")),
+                    },
+                );
             }
         }
 
@@ -1471,12 +1540,22 @@ fn decode_json_response<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, ConnectorError> {
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_header(&response);
         let body = response
             .text()
             .unwrap_or_else(|_| "<response body unavailable>".to_owned());
+        let detail = format!("{operation} request returned {status}: {body}");
+        if let Some(error) = rate_limit_error(
+            ConnectorKind::Binance,
+            status,
+            retry_after.as_deref(),
+            detail.clone(),
+        ) {
+            return Err(error);
+        }
         return Err(ConnectorError::RemoteSnapshot {
             kind: ConnectorKind::Binance,
-            detail: format!("{operation} request returned {status}: {body}"),
+            detail,
         });
     }
 
@@ -1494,12 +1573,22 @@ fn decode_order_submission_json<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, ConnectorError> {
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_header(&response);
         let body = response
             .text()
             .unwrap_or_else(|_| "<response body unavailable>".to_owned());
+        let detail = format!("{operation} request returned {status}: {body}");
+        if let Some(error) = rate_limit_error(
+            ConnectorKind::Binance,
+            status,
+            retry_after.as_deref(),
+            detail.clone(),
+        ) {
+            return Err(error);
+        }
         return Err(ConnectorError::OrderSubmission {
             kind: ConnectorKind::Binance,
-            detail: format!("{operation} request returned {status}: {body}"),
+            detail,
         });
     }
 
@@ -1521,14 +1610,18 @@ fn extract_symbol_constraints(
         .find(|entry| entry.symbol == symbol)
         .ok_or_else(|| ConnectorError::RemoteSnapshot {
             kind: ConnectorKind::Binance,
-            detail: format!("exchangeInfo did not include symbol `{symbol}`"),
+            detail: format!(
+                "exchangeInfo did not include symbol `{}`",
+                sanitize_symbol_for_error(symbol)
+            ),
         })?;
 
     if !symbol_payload.status.eq_ignore_ascii_case("TRADING") {
         return Err(ConnectorError::RemoteSnapshot {
             kind: ConnectorKind::Binance,
             detail: format!(
-                "symbol `{symbol}` is not trading (status={})",
+                "symbol `{}` is not trading (status={})",
+                sanitize_symbol_for_error(symbol),
                 symbol_payload.status
             ),
         });
@@ -1625,6 +1718,18 @@ fn parse_kline_row(row: &[serde_json::Value]) -> Result<OhlcvBar, ConnectorError
     parse_kline_row_with_close_time(row).map(|(bar, _)| bar)
 }
 
+/// Parses a single Binance kline row into an [`OhlcvBar`] plus its close-time
+/// in epoch milliseconds.
+///
+/// Binance kline rows carry open time at index 0 and (for full rows) close
+/// time at index 6. A well-formed REST response always includes the close
+/// time, but this parser is defensive: rows with fewer than 7 fields fall back
+/// to using the open time as the close time. That fallback makes such a bar
+/// look like it closed at its open instant, so it is treated as already
+/// confirmed by the strict `close_time_ms < now_ms` filters downstream; this
+/// is the conservative choice for a truncated row where the real close time is
+/// unknown. Rows with fewer than 6 fields, or any field that is not a valid
+/// JSON number, are rejected with a [`ConnectorError::RemoteSnapshot`].
 fn parse_kline_row_with_close_time(
     row: &[serde_json::Value],
 ) -> Result<(OhlcvBar, i64), ConnectorError> {
@@ -1952,13 +2057,31 @@ mod tests {
     #[test]
     fn formats_binance_quantity_without_excess_precision() {
         assert_eq!(
-            format_binance_quantity(0.000_140_000_000_000_000_01),
+            format_binance_quantity(0.000_140_000_000_000_000_01).unwrap(),
             "0.00014"
         );
         assert_eq!(
-            format_binance_quantity(2_499_999.999_990_000_4),
+            format_binance_quantity(2_499_999.999_990_000_4).unwrap(),
             "2499999.99999"
         );
+    }
+
+    #[test]
+    fn rejects_non_finite_binance_quantity() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = format_binance_quantity(value)
+                .expect_err("non-finite quantity must be rejected, not formatted as 0");
+            assert!(
+                matches!(error, ConnectorError::OrderSubmission { .. }),
+                "expected OrderSubmission error, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn formats_non_positive_binance_quantity_as_zero() {
+        assert_eq!(format_binance_quantity(0.0).unwrap(), "0");
+        assert_eq!(format_binance_quantity(-1.0).unwrap(), "0");
     }
 
     #[test]
@@ -2088,6 +2211,130 @@ mod tests {
 
         assert_eq!(latest.timestamp.timestamp_millis(), 1_704_067_260_000);
         assert_f64_eq(latest.close, 42_120.0);
+    }
+
+    #[test]
+    fn parse_kline_row_uses_close_time_when_present() {
+        let row = vec![
+            serde_json::json!(1_704_067_200_000_i64),
+            serde_json::json!("42000.1"),
+            serde_json::json!("42100.0"),
+            serde_json::json!("41950.2"),
+            serde_json::json!("42080.4"),
+            serde_json::json!("12.5"),
+            serde_json::json!(1_704_067_259_999_i64),
+        ];
+
+        let (bar, close_time_ms) = parse_kline_row_with_close_time(&row).unwrap();
+        assert_eq!(bar.timestamp.timestamp_millis(), 1_704_067_200_000);
+        assert_eq!(close_time_ms, 1_704_067_259_999);
+    }
+
+    #[test]
+    fn parse_kline_row_falls_back_to_open_time_when_close_time_missing() {
+        // Six-field row (no close time at index 6): the parser falls back to
+        // using the open time as the close time.
+        let row = vec![
+            serde_json::json!(1_704_067_200_000_i64),
+            serde_json::json!("42000.1"),
+            serde_json::json!("42100.0"),
+            serde_json::json!("41950.2"),
+            serde_json::json!("42080.4"),
+            serde_json::json!("12.5"),
+        ];
+
+        let (bar, close_time_ms) = parse_kline_row_with_close_time(&row).unwrap();
+        assert_eq!(bar.timestamp.timestamp_millis(), 1_704_067_200_000);
+        assert_eq!(close_time_ms, 1_704_067_200_000);
+    }
+
+    #[test]
+    fn parse_kline_row_rejects_short_row() {
+        let row = vec![
+            serde_json::json!(1_704_067_200_000_i64),
+            serde_json::json!("42000.1"),
+        ];
+
+        let error = parse_kline_row_with_close_time(&row)
+            .expect_err("rows with fewer than 6 fields must be rejected");
+        assert!(matches!(error, ConnectorError::RemoteSnapshot { .. }));
+    }
+
+    #[test]
+    fn parse_kline_row_rejects_invalid_number() {
+        // A non-numeric open price must surface as an error rather than being
+        // silently coerced.
+        let row = vec![
+            serde_json::json!(1_704_067_200_000_i64),
+            serde_json::json!("not-a-number"),
+            serde_json::json!("42100.0"),
+            serde_json::json!("41950.2"),
+            serde_json::json!("42080.4"),
+            serde_json::json!("12.5"),
+            serde_json::json!(1_704_067_259_999_i64),
+        ];
+
+        let error = parse_kline_row_with_close_time(&row)
+            .expect_err("invalid JSON number must be rejected");
+        assert!(matches!(error, ConnectorError::RemoteSnapshot { .. }));
+    }
+
+    #[test]
+    fn parse_kline_row_rejects_invalid_close_time_number() {
+        let row = vec![
+            serde_json::json!(1_704_067_200_000_i64),
+            serde_json::json!("42000.1"),
+            serde_json::json!("42100.0"),
+            serde_json::json!("41950.2"),
+            serde_json::json!("42080.4"),
+            serde_json::json!("12.5"),
+            serde_json::json!("not-a-number"),
+        ];
+
+        let error = parse_kline_row_with_close_time(&row)
+            .expect_err("invalid close-time number must be rejected");
+        assert!(matches!(error, ConnectorError::RemoteSnapshot { .. }));
+    }
+
+    #[test]
+    fn bar_closing_exactly_at_now_is_not_confirmed_on_either_path() {
+        // Confirmation boundary: a kline whose close time equals `now_ms` is
+        // still forming and must NOT be treated as confirmed. Both the
+        // recent-klines path and the confirmed-range path must agree, using a
+        // strict `<` comparison.
+        let open_time_ms = 1_704_067_200_000_i64;
+        let close_time_ms = 1_704_067_259_999_i64;
+        let now_ms = close_time_ms; // exactly at close time
+
+        let row = vec![
+            serde_json::json!(open_time_ms),
+            serde_json::json!("42000.1"),
+            serde_json::json!("42100.0"),
+            serde_json::json!("41950.2"),
+            serde_json::json!("42080.4"),
+            serde_json::json!("12.5"),
+            serde_json::json!(close_time_ms),
+        ];
+
+        // Recent-klines path: a bar closing exactly at now is excluded.
+        let recent = normalize_recent_binance_klines(vec![row.clone()], 10, now_ms).unwrap();
+        assert!(
+            recent.is_empty(),
+            "bar closing exactly at now must not be confirmed on the recent-klines path"
+        );
+
+        // Confirmed-range path (shares `parse_kline_row_with_close_time`): the
+        // same `close_time_ms < now_ms` rule rejects the boundary bar, and
+        // accepts it one millisecond later.
+        let (_, parsed_close_time_ms) = parse_kline_row_with_close_time(&row).unwrap();
+        assert!(
+            parsed_close_time_ms >= now_ms,
+            "boundary bar must be unconfirmed at now == close_time"
+        );
+        assert!(
+            parsed_close_time_ms < now_ms + 1,
+            "the same bar must be confirmed one millisecond after its close time"
+        );
     }
 
     #[test]

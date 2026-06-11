@@ -30,7 +30,24 @@ pub fn resolve_order_quantity_with_constraints(
 
     let raw_quantity = match intent {
         TradeIntent::NoOp => 0.0,
-        TradeIntent::CloseLong | TradeIntent::ReduceLong => current_position_quantity.max(0.0),
+        TradeIntent::CloseLong | TradeIntent::ReduceLong => {
+            // A negative current position quantity on a close/reduce indicates an
+            // upstream position-tracking/reconciliation error: long-only semantics
+            // mean a position being closed must be >= 0. Previously this was silently
+            // clamped to 0.0, which produced a benign-looking zero-quantity close and
+            // swallowed the reconciliation error. Instead, surface it as a warning
+            // signal (a zero-quantity resolution carrying a distinct reason) so the
+            // caller/operator can detect and investigate the discrepancy. The output
+            // quantity remains 0.0, preserving the non-negative/finite invariant.
+            if !current_position_quantity.is_finite() || current_position_quantity < 0.0 {
+                return OrderQuantityResolution {
+                    quantity: 0.0,
+                    adjustment_reason: Some("negative_position_quantity".to_owned()),
+                    ledger_outcome: None,
+                };
+            }
+            current_position_quantity
+        }
         TradeIntent::OpenLong | TradeIntent::AddLong => {
             let capped_target_order_notional_usd =
                 target_order_notional_usd.min(limits.max_order_notional_usd);
@@ -417,6 +434,70 @@ mod tests {
                 })
         );
     }
+
+    #[test]
+    fn close_long_with_negative_position_quantity_surfaces_reconciliation_warning() {
+        let resolution = resolve_order_quantity_with_constraints(
+            TradeIntent::CloseLong,
+            MarketType::Crypto,
+            100.0,
+            -1.5,
+            1_000.0,
+            1_000.0,
+            limits(),
+            100.0,
+            &ExecutionConstraintsConfig::default(),
+            false,
+        );
+        assert!((resolution.quantity - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            resolution.adjustment_reason.as_deref(),
+            Some("negative_position_quantity")
+        );
+        assert!(resolution.ledger_outcome.is_none());
+    }
+
+    #[test]
+    fn reduce_long_with_negative_position_quantity_surfaces_reconciliation_warning() {
+        let resolution = resolve_order_quantity_with_constraints(
+            TradeIntent::ReduceLong,
+            MarketType::Equities,
+            50.0,
+            -0.001,
+            1_000.0,
+            1_000.0,
+            limits(),
+            100.0,
+            &ExecutionConstraintsConfig::default(),
+            false,
+        );
+        assert!((resolution.quantity - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            resolution.adjustment_reason.as_deref(),
+            Some("negative_position_quantity")
+        );
+    }
+
+    #[test]
+    fn close_long_with_non_finite_position_quantity_surfaces_reconciliation_warning() {
+        let resolution = resolve_order_quantity_with_constraints(
+            TradeIntent::CloseLong,
+            MarketType::Crypto,
+            100.0,
+            f64::NAN,
+            1_000.0,
+            1_000.0,
+            limits(),
+            100.0,
+            &ExecutionConstraintsConfig::default(),
+            false,
+        );
+        assert!((resolution.quantity - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            resolution.adjustment_reason.as_deref(),
+            Some("negative_position_quantity")
+        );
+    }
 }
 
 #[cfg(kani)]
@@ -462,6 +543,15 @@ mod proofs {
         }
     }
 
+    fn position_case(selector: u8) -> f64 {
+        match selector % 4 {
+            0 => 0.0,
+            1 => -positive_value(selector),
+            2 => f64::NEG_INFINITY,
+            _ => positive_value(selector),
+        }
+    }
+
     fn constraints_case(selector: u8) -> ExecutionConstraintsConfig {
         match selector % 4 {
             0 => ExecutionConstraintsConfig::default(),
@@ -493,7 +583,7 @@ mod proofs {
                 MarketType::Crypto
             },
             price_case(kani::any()),
-            positive_value(kani::any()),
+            position_case(kani::any()),
             positive_value(kani::any()),
             positive_value(kani::any()),
             limits(),
@@ -565,5 +655,31 @@ mod proofs {
             false,
         );
         assert_eq!(min_quantity_violation.quantity, 0.0);
+    }
+
+    #[kani::proof]
+    fn proof_close_with_negative_position_quantity_yields_zero() {
+        let resolution = resolve_order_quantity_with_constraints(
+            if kani::any() {
+                TradeIntent::CloseLong
+            } else {
+                TradeIntent::ReduceLong
+            },
+            if kani::any() {
+                MarketType::Equities
+            } else {
+                MarketType::Crypto
+            },
+            positive_value(kani::any()),
+            -positive_value(kani::any()),
+            positive_value(kani::any()),
+            positive_value(kani::any()),
+            limits(),
+            positive_value(kani::any()) * 10.0,
+            &constraints_case(kani::any()),
+            kani::any(),
+        );
+
+        assert_eq!(resolution.quantity, 0.0);
     }
 }

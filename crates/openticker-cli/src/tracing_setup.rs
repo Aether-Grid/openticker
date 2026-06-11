@@ -16,8 +16,12 @@ pub(crate) fn init_tracing() {
         let filter = EnvFilter::try_from_env("OPENTICKER_LOG")
             .or_else(|_| EnvFilter::try_from_default_env())
             .unwrap_or_else(|_| {
+                // `openticker_cli=info` keeps the operator audit trail for
+                // destructive commands (close-positions, kill-switch, etc.)
+                // visible by default; see `commands::confirm_destructive` and the
+                // dashboard's `execute_bot_operation`.
                 EnvFilter::new(
-                    "openticker_runtime=debug,openticker_http=info,openticker_signals=debug,warn",
+                    "openticker_runtime=debug,openticker_http=info,openticker_signals=debug,openticker_cli=info,warn",
                 )
             });
 

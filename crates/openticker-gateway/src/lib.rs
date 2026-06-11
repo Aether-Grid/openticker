@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use openticker_config::{AccountConfig, ExecutionConstraintsConfig};
 use openticker_connectors::{
     ConfirmedBarPage, ConnectionState, ConnectorAccountSnapshot, ConnectorAccountStatus,
-    ConnectorError, ConnectorKind, ConnectorPreviewStreamSession, ConnectorRegistry,
-    ConnectorSymbolConstraints,
+    ConnectorClientHandle, ConnectorError, ConnectorKind, ConnectorPreviewStreamSession,
+    ConnectorRegistry, ConnectorSymbolConstraints,
 };
 use openticker_core::{OhlcvBar, Timeframe};
 use openticker_data::NormalizedBarUpdate;
@@ -12,6 +12,10 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+
+/// Fallback throttle window applied when a provider reports a rate limit
+/// without a usable retry-after hint.
+const DEFAULT_THROTTLE_WINDOW_MS: u64 = 60_000;
 
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -73,6 +77,51 @@ impl Gateway {
             .map_err(|_| GatewayError::LockPoisoned)
     }
 
+    /// Resolves a detached client handle for a connected account, holding the
+    /// registry lock only for the lookup so network calls run outside it.
+    ///
+    /// By design there is no retry window between the caller's
+    /// `ensure_account_ready` check and the handle resolved here: if the
+    /// account is dropped or disconnected in that gap, the resolution fails
+    /// and the error propagates without an automatic retry. Callers that need
+    /// resilience must re-invoke the readiness path.
+    fn connected_client(&self, account_id: &str) -> Result<ConnectorClientHandle, GatewayError> {
+        let connectors = self.lock_connectors()?;
+        connectors.connected_client(account_id).map_err(Into::into)
+    }
+
+    /// Resolves a detached client handle without a connection-state pre-check.
+    fn client_unchecked(&self, account_id: &str) -> Result<ConnectorClientHandle, GatewayError> {
+        let connectors = self.lock_connectors()?;
+        connectors.client_unchecked(account_id).map_err(Into::into)
+    }
+
+    /// Throttles the account when a connector operation reports a rate limit,
+    /// so subsequent readiness checks fail fast until the window passes.
+    fn track_rate_limit<T>(
+        &self,
+        account_id: &str,
+        result: Result<T, ConnectorError>,
+    ) -> Result<T, GatewayError> {
+        if let Err(ConnectorError::RateLimited { retry_after_ms, .. }) = &result {
+            let throttle_window_ms = retry_after_ms.unwrap_or(DEFAULT_THROTTLE_WINDOW_MS);
+            if let Ok(connectors) = self.lock_connectors()
+                && let Err(error) = connectors.note_account_rate_limit(
+                    account_id,
+                    unix_now_ms(),
+                    throttle_window_ms,
+                )
+            {
+                tracing::warn!(
+                    account_id,
+                    %error,
+                    "failed to record connector rate-limit; throttle state may be stale",
+                );
+            }
+        }
+        result.map_err(Into::into)
+    }
+
     /// Returns connector statuses for all configured accounts.
     ///
     /// # Errors
@@ -110,6 +159,13 @@ impl Gateway {
 
     /// Verifies that an account is connected and records readiness transitions.
     ///
+    /// The registry lock is intentionally held for the whole status check and
+    /// resilience update so the read-then-update sequence stays consistent; the
+    /// per-client write taken by `note_account_reconnect_success` runs while the
+    /// registry lock is held. This is acceptable because the operation is
+    /// in-memory bookkeeping (no network I/O) and the reset is skipped entirely
+    /// when there is no resilience state to clear.
+    ///
     /// # Errors
     ///
     /// Returns [`GatewayError::LockPoisoned`] when the connector registry mutex
@@ -117,15 +173,53 @@ impl Gateway {
     /// not registered, or [`GatewayError::ConnectorNotReady`] when the account
     /// is currently disconnected.
     pub fn ensure_account_ready(&self, account_id: &str) -> Result<(), GatewayError> {
-        let mut connectors = self.lock_connectors()?;
+        let connectors = self.lock_connectors()?;
 
         let status = connectors.status_for_account(account_id)?;
+        if let Some(throttled_until_ms) = status.resilience_state.throttled_until_ms
+            && unix_now_ms() < throttled_until_ms
+        {
+            return Err(GatewayError::ConnectorNotReady {
+                account_id: account_id.to_owned(),
+                state: status.state,
+                reason: format!("provider rate limit active until {throttled_until_ms}"),
+            });
+        }
         if matches!(status.state, ConnectionState::Connected) {
-            let _ = connectors.note_account_reconnect_success(account_id);
+            // Only reset resilience state when there is something to reset:
+            // the reset takes the per-client write lock, which would otherwise
+            // queue behind in-flight fetches on every healthy call.
+            if status.resilience_state.consecutive_failures > 0
+                || status.resilience_state.next_reconnect_at_ms.is_some()
+                || status.resilience_state.throttled_until_ms.is_some()
+            {
+                // Best-effort bookkeeping: the account was just observed via
+                // `status_for_account`, so a failure here is unexpected. Log it
+                // rather than discarding it silently so a stale resilience state
+                // is traceable.
+                if let Err(error) = connectors.note_account_reconnect_success(account_id) {
+                    tracing::warn!(
+                        account_id,
+                        %error,
+                        "failed to record connector reconnect success; resilience state may be stale",
+                    );
+                }
+            }
             return Ok(());
         }
 
-        let _ = connectors.note_account_disconnect(account_id, unix_now_ms());
+        // Best-effort bookkeeping before reporting the not-ready status. A
+        // failure here means the subsequent `status_for_account` read could
+        // return state that predates this disconnect, so surface it via a log
+        // instead of swallowing it. (If the account vanished concurrently the
+        // `status_for_account` call below propagates an `UnknownAccount` error.)
+        if let Err(error) = connectors.note_account_disconnect(account_id, unix_now_ms()) {
+            tracing::warn!(
+                account_id,
+                %error,
+                "failed to record connector disconnect; readiness reason may be stale",
+            );
+        }
         let status = connectors.status_for_account(account_id)?;
         Err(GatewayError::ConnectorNotReady {
             account_id: account_id.to_owned(),
@@ -145,10 +239,8 @@ impl Gateway {
         &self,
         account_id: &str,
     ) -> Result<ConnectorAccountSnapshot, GatewayError> {
-        let connectors = self.lock_connectors()?;
-        connectors
-            .fetch_account_snapshot_unchecked(account_id)
-            .map_err(Into::into)
+        let client = self.client_unchecked(account_id)?;
+        self.track_rate_limit(account_id, client.fetch_account_snapshot())
     }
 
     /// Normalizes a provider market-stream payload into a runtime bar update.
@@ -165,9 +257,9 @@ impl Gateway {
         payload: &str,
     ) -> Result<Option<NormalizedBarUpdate>, GatewayError> {
         self.ensure_account_ready(account_id)?;
-        let connectors = self.lock_connectors()?;
-        connectors
-            .normalize_market_data_event(account_id, payload)
+        let client = self.connected_client(account_id)?;
+        client
+            .normalize_market_data_event(payload)
             .map_err(Into::into)
     }
 
@@ -182,10 +274,8 @@ impl Gateway {
         &self,
         account_id: &str,
     ) -> Result<Option<ConnectorPreviewStreamSession>, GatewayError> {
-        let connectors = self.lock_connectors()?;
-        connectors
-            .start_preview_stream_session(account_id)
-            .map_err(Into::into)
+        let client = self.client_unchecked(account_id)?;
+        client.start_preview_stream_session().map_err(Into::into)
     }
 
     /// Fetches the latest bar for a symbol and timeframe.
@@ -203,10 +293,8 @@ impl Gateway {
         timeframe: Timeframe,
     ) -> Result<OhlcvBar, GatewayError> {
         self.ensure_account_ready(account_id)?;
-        let connectors = self.lock_connectors()?;
-        connectors
-            .fetch_latest_bar(account_id, symbol, timeframe)
-            .map_err(Into::into)
+        let client = self.connected_client(account_id)?;
+        self.track_rate_limit(account_id, client.fetch_latest_bar(symbol, timeframe))
     }
 
     /// Fetches recent bars for a symbol and timeframe.
@@ -225,10 +313,11 @@ impl Gateway {
         limit: usize,
     ) -> Result<Vec<OhlcvBar>, GatewayError> {
         self.ensure_account_ready(account_id)?;
-        let connectors = self.lock_connectors()?;
-        connectors
-            .fetch_recent_bars(account_id, symbol, timeframe, limit)
-            .map_err(Into::into)
+        let client = self.connected_client(account_id)?;
+        self.track_rate_limit(
+            account_id,
+            client.fetch_recent_bars(symbol, timeframe, limit),
+        )
     }
 
     /// Fetches the latest confirmed bar timestamp for a symbol and timeframe.
@@ -246,10 +335,11 @@ impl Gateway {
         timeframe: Timeframe,
     ) -> Result<Option<DateTime<Utc>>, GatewayError> {
         self.ensure_account_ready(account_id)?;
-        let connectors = self.lock_connectors()?;
-        connectors
-            .fetch_latest_confirmed_bar_timestamp(account_id, symbol, timeframe)
-            .map_err(Into::into)
+        let client = self.connected_client(account_id)?;
+        self.track_rate_limit(
+            account_id,
+            client.fetch_latest_confirmed_bar_timestamp(symbol, timeframe),
+        )
     }
 
     /// Fetches a page of confirmed bars in `(start_after, end_at]` for a symbol and timeframe.
@@ -270,10 +360,11 @@ impl Gateway {
         limit: usize,
     ) -> Result<ConfirmedBarPage, GatewayError> {
         self.ensure_account_ready(account_id)?;
-        let connectors = self.lock_connectors()?;
-        connectors
-            .fetch_confirmed_bars_range(account_id, symbol, timeframe, start_after, end_at, limit)
-            .map_err(Into::into)
+        let client = self.connected_client(account_id)?;
+        self.track_rate_limit(
+            account_id,
+            client.fetch_confirmed_bars_range(symbol, timeframe, start_after, end_at, limit),
+        )
     }
 
     /// Fetches symbol-level execution constraints without a readiness pre-check.
@@ -288,10 +379,8 @@ impl Gateway {
         account_id: &str,
         symbol: &str,
     ) -> Result<ConnectorSymbolConstraints, GatewayError> {
-        let connectors = self.lock_connectors()?;
-        connectors
-            .fetch_symbol_constraints_unchecked(account_id, symbol)
-            .map_err(Into::into)
+        let client = self.client_unchecked(account_id)?;
+        self.track_rate_limit(account_id, client.fetch_symbol_constraints(symbol))
     }
 
     /// Fetches symbol constraints and normalizes them into the shared
@@ -325,10 +414,8 @@ impl Gateway {
         request: &ExecutionRequest,
     ) -> Result<AcceptedOrder, GatewayError> {
         self.ensure_account_ready(account_id)?;
-        let connectors = self.lock_connectors()?;
-        connectors
-            .submit_order(account_id, request)
-            .map_err(Into::into)
+        let client = self.connected_client(account_id)?;
+        self.track_rate_limit(account_id, client.submit_order(request))
     }
 }
 

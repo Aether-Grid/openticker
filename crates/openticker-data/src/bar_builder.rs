@@ -117,9 +117,19 @@ fn apply_trade_to_bar(bar: &mut OhlcvBar, trade: &NormalizedTrade) {
 fn floor_to_timeframe(timestamp: DateTime<Utc>, timeframe: Timeframe) -> DateTime<Utc> {
     let timeframe_seconds = timeframe.duration().as_secs().cast_signed();
     let unix_seconds = timestamp.timestamp();
-    let floored_unix = unix_seconds - (unix_seconds.rem_euclid(timeframe_seconds));
+    let offset = unix_seconds.rem_euclid(timeframe_seconds);
+    let floored_unix = unix_seconds - offset;
+    // `rem_euclid` returns a value in `0..timeframe_seconds` (non-negative and
+    // strictly less than the divisor) for any input, so the fallback subtraction
+    // below shifts `timestamp` back by less than one timeframe and cannot
+    // underflow `DateTime`. The fallback only runs in the rare case where
+    // `from_timestamp` rejects `floored_unix` (out of `DateTime`'s range).
+    debug_assert!(
+        (0..timeframe_seconds).contains(&offset),
+        "rem_euclid must yield 0..timeframe_seconds",
+    );
     DateTime::<Utc>::from_timestamp(floored_unix, 0)
-        .unwrap_or(timestamp - Duration::seconds(unix_seconds.rem_euclid(timeframe_seconds)))
+        .unwrap_or(timestamp - Duration::seconds(offset))
 }
 
 #[cfg(test)]

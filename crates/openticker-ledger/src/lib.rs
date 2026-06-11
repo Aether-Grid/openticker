@@ -13,8 +13,8 @@ pub use portfolio::{
     AccountPortfolioSnapshot, BotPortfolioSnapshot, LanePortfolioSnapshot, LedgerSnapshot,
 };
 pub use types::{
-    BotAllocationPolicy, LedgerException, LedgerExceptionKind, LedgerOwnerPath, OwnershipPolicy,
-    OwnershipResolution, ReservationError,
+    BotAllocationPolicy, LedgerError, LedgerException, LedgerExceptionKind, LedgerOwnerPath,
+    OwnershipPolicy, OwnershipResolution, ReservationError,
 };
 pub use util::{calculate_position_notional_usd, sanitize_ledger_value};
 

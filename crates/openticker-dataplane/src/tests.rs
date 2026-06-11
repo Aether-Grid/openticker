@@ -236,7 +236,7 @@ fn duplicate_confirmed_fetch_does_not_advance_confirmed_source_or_freshness() {
         first.confirmed_bar_close_ms
     );
     assert_eq!(duplicate.confirmed_bar_staleness_ms, Some(0));
-    assert_eq!(duplicate.latest_bar.unwrap().close, 100.0);
+    assert!((duplicate.latest_bar.unwrap().close - 100.0).abs() < f64::EPSILON);
 }
 
 #[test]

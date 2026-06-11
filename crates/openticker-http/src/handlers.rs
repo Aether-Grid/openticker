@@ -1,8 +1,9 @@
 use crate::config_ops::{ConfigApplyError, ReloadTrigger, reload_from_disk, violation_summary};
 use crate::constants::{
-    BOT_SNAPSHOT_ORDERS_LIMIT, BOT_SNAPSHOT_POSITIONS_LIMIT, BOT_SNAPSHOT_TIMELINE_LIMIT,
-    DASHBOARD_HTML, DASHBOARD_SNAPSHOT_DEFAULT_LIMIT, DEFAULT_STREAM_BARS_LIMIT,
-    STREAM_SPARKLINE_LIMIT, UI_DIST, generated_openapi_spec,
+    BLOCKING_QUERY_TIMEOUT, BOT_SNAPSHOT_ORDERS_LIMIT, BOT_SNAPSHOT_POSITIONS_LIMIT,
+    BOT_SNAPSHOT_TIMELINE_LIMIT, DASHBOARD_HTML, DASHBOARD_SNAPSHOT_DEFAULT_LIMIT,
+    DEFAULT_STREAM_BARS_LIMIT, MAX_QUERY_LIMIT, STREAM_SPARKLINE_LIMIT, UI_DIST,
+    generated_openapi_spec,
 };
 use crate::state::{
     DashboardBotSnapshot, DashboardHomeSnapshot, DashboardRiskDecisionsSnapshot, ErrorResponse,
@@ -26,7 +27,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub(crate) fn unix_now_ms() -> i64 {
     let duration = SystemTime::now()
@@ -40,18 +41,51 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, ServiceError> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(operation).await {
+    // Bound how long a handler waits on storage. Note that a timed-out
+    // closure keeps running on the blocking pool until it returns on its
+    // own; the timeout only frees the handler (and its client) to respond.
+    let join_result = match tokio::time::timeout(
+        BLOCKING_QUERY_TIMEOUT,
+        tokio::task::spawn_blocking(operation),
+    )
+    .await
+    {
+        Ok(join_result) => join_result,
+        Err(_elapsed) => {
+            warn!(
+                timeout_secs = BLOCKING_QUERY_TIMEOUT.as_secs(),
+                "blocking query timed out; storage backend is unresponsive"
+            );
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "query timed out; storage backend is unresponsive".to_owned(),
+                }),
+            )
+                .into_response());
+        }
+    };
+    match join_result {
         Ok(result) => result.map_err(|error| service_error_into_response(&error)),
         Err(error) => {
-            let message = format!("blocking query task failed: {error}");
-            error!(error = %message, "blocking query task panicked or was cancelled");
+            error!(error = %error, "blocking query task panicked or was cancelled");
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: message }),
+                Json(ErrorResponse {
+                    error: "internal error".to_owned(),
+                }),
             )
                 .into_response())
         }
     }
+}
+
+/// Clamps a caller-supplied `limit` query parameter to [`MAX_QUERY_LIMIT`],
+/// falling back to `default` when absent. Every limit accepted from a request
+/// must pass through this helper so no endpoint forwards an unbounded value
+/// to storage.
+fn clamped_limit(limit: Option<usize>, default: usize) -> usize {
+    limit.unwrap_or(default).min(MAX_QUERY_LIMIT)
 }
 
 fn prometheus_label_value(value: &str) -> String {
@@ -64,6 +98,11 @@ pub(crate) async fn dashboard_handler() -> Html<&'static str> {
 
 pub(crate) async fn ui_asset_handler(uri: axum::http::Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
+    // Defense in depth: parent-directory components must never reach the
+    // embedded-asset lookup, where they could confuse path matching.
+    if path.split('/').any(|segment| segment == "..") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     if let Some(file) = UI_DIST.get_file(path) {
         let mime = guess_ui_asset_mime(path);
         let cache_control = ui_asset_cache_header(path);
@@ -478,7 +517,7 @@ pub(crate) async fn list_data_stream_bars_handler(
         symbol,
         timeframe,
     };
-    let limit = query.limit.unwrap_or(DEFAULT_STREAM_BARS_LIMIT);
+    let limit = clamped_limit(query.limit, DEFAULT_STREAM_BARS_LIMIT);
 
     match state.data_plane.snapshot_bars(&stream_key, limit) {
         Ok(bars) => (StatusCode::OK, Json(json!(bars))).into_response(),
@@ -515,7 +554,7 @@ pub(crate) async fn list_data_stream_history_handler(
         symbol,
         timeframe,
     };
-    let limit = query.limit.unwrap_or(DEFAULT_STREAM_BARS_LIMIT).max(1);
+    let limit = clamped_limit(query.limit, DEFAULT_STREAM_BARS_LIMIT).max(1);
 
     if let Err(error) = state.data_plane.snapshot_bars(&stream_key, 1) {
         return (
@@ -956,10 +995,7 @@ pub(crate) async fn dashboard_snapshot_handler(
     State(state): State<HttpState>,
     Query(query): Query<LimitQuery>,
 ) -> impl IntoResponse {
-    let limit = query
-        .limit
-        .unwrap_or(DASHBOARD_SNAPSHOT_DEFAULT_LIMIT)
-        .min(1_000);
+    let limit = clamped_limit(query.limit, DASHBOARD_SNAPSHOT_DEFAULT_LIMIT);
     match dashboard_home_snapshot(&state, limit).await {
         Ok(snapshot) => (StatusCode::OK, Json(json!(snapshot))).into_response(),
         Err(error) => service_error_into_response(&error),
@@ -1099,10 +1135,11 @@ pub(crate) async fn tick_bot_handler(
                     .data_plane
                     .record_fetched_bar(&stream_key, now_ms, bar)
                 {
+                    error!(error = %error, "failed to record fetched bar to data plane");
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ErrorResponse {
-                            error: error.to_string(),
+                            error: "internal error".to_owned(),
                         }),
                     )
                         .into_response();
@@ -1155,7 +1192,7 @@ pub(crate) async fn list_events_handler(
     Query(query): Query<EventsQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     let result = run_blocking_query(move || match (query.scope, query.entity_id) {
         (Some(scope), Some(entity_id)) => {
             query_handle.recent_events_by_scope_and_entity(&scope, &entity_id, limit)
@@ -1177,7 +1214,7 @@ pub(crate) async fn list_signals_handler(
     Query(query): Query<LimitQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     match run_blocking_query(move || query_handle.recent_signals(limit)).await {
         Ok(signals) => (StatusCode::OK, Json(json!(signals))).into_response(),
         Err(response) => response,
@@ -1189,7 +1226,7 @@ pub(crate) async fn list_intents_handler(
     Query(query): Query<LimitQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     match run_blocking_query(move || query_handle.recent_intents(limit)).await {
         Ok(intents) => (StatusCode::OK, Json(json!(intents))).into_response(),
         Err(response) => response,
@@ -1201,7 +1238,7 @@ pub(crate) async fn list_risk_decisions_handler(
     Query(query): Query<LimitQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     match run_blocking_query(move || query_handle.recent_risk_decisions(limit)).await {
         Ok(decisions) => {
             let count = decisions.len();
@@ -1220,7 +1257,7 @@ pub(crate) async fn list_orders_handler(
     Query(query): Query<BotLimitQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     let result = run_blocking_query(move || {
         if let Some(bot_id) = query.bot_id {
             query_handle.recent_orders_for_bot(&bot_id, limit)
@@ -1240,7 +1277,7 @@ pub(crate) async fn list_fills_handler(
     Query(query): Query<BotLimitQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     let result = run_blocking_query(move || {
         if let Some(bot_id) = query.bot_id {
             query_handle.recent_fills_for_bot(&bot_id, limit)
@@ -1260,7 +1297,7 @@ pub(crate) async fn list_positions_handler(
     Query(query): Query<BotLimitQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     let result = run_blocking_query(move || {
         if let Some(bot_id) = query.bot_id {
             query_handle.recent_positions_for_bot(&bot_id, limit)
@@ -1280,7 +1317,7 @@ pub(crate) async fn list_reconciliations_handler(
     Query(query): Query<ReconciliationsQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(100).min(1_000);
+    let limit = clamped_limit(query.limit, 100);
     let bot_id = query.bot_id;
     if let Some(bot_id) = bot_id.as_deref() {
         let validation = {
@@ -1346,7 +1383,7 @@ pub(crate) async fn list_bot_cycles_handler(
     Query(query): Query<BotCyclesQuery>,
 ) -> impl IntoResponse {
     let query_handle = state.query.read().await.clone();
-    let limit = query.limit.unwrap_or(50).min(1_000);
+    let limit = clamped_limit(query.limit, 50);
     match run_blocking_query(move || {
         query_handle.recent_cycle_traces_for_bot(
             &instance_id,
@@ -1529,6 +1566,30 @@ pub(crate) async fn disable_kill_switch_handler(
     }
 }
 
+/// Stable, leak-free identifier for a [`ServiceError`] variant, suitable for
+/// log fields where the full `Display` output would expose internals.
+fn service_error_category(error: &ServiceError) -> &'static str {
+    match error {
+        ServiceError::InstanceNotFound(_) => "instance_not_found",
+        ServiceError::InstanceDisabled(_) => "instance_disabled",
+        ServiceError::ReconciliationRequired { .. } => "reconciliation_required",
+        ServiceError::KillSwitchEnabled => "kill_switch_enabled",
+        ServiceError::InvalidTransition { .. } => "invalid_transition",
+        ServiceError::TradeSymbolMismatch { .. } => "trade_symbol_mismatch",
+        ServiceError::SymbolSelectionRequired { .. } => "symbol_selection_required",
+        ServiceError::SymbolNotConfigured { .. } => "symbol_not_configured",
+        ServiceError::ConnectorNotReady { .. } => "connector_not_ready",
+        ServiceError::DataConnectorUnavailable { .. } => "data_connector_unavailable",
+        ServiceError::ExecutionConnectorUnavailable { .. } => "execution_connector_unavailable",
+        ServiceError::InvalidConfiguration(_) => "invalid_configuration",
+        ServiceError::LedgerInvariantViolation { .. } => "ledger_invariant_violation",
+        ServiceError::Data(_) => "data",
+        ServiceError::Execution(_) => "execution",
+        ServiceError::Storage(_) => "storage",
+        ServiceError::Json(_) => "json",
+    }
+}
+
 fn service_error_into_response(error: &ServiceError) -> axum::response::Response {
     let status = match error {
         ServiceError::InstanceNotFound(_) => StatusCode::NOT_FOUND,
@@ -1545,22 +1606,55 @@ fn service_error_into_response(error: &ServiceError) -> axum::response::Response
         | ServiceError::InvalidTransition { .. } => StatusCode::CONFLICT,
         ServiceError::DataConnectorUnavailable { .. }
         | ServiceError::ExecutionConnectorUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
-        ServiceError::Storage(_) | ServiceError::Json(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        ServiceError::Storage(_)
+        | ServiceError::Json(_)
+        | ServiceError::LedgerInvariantViolation { .. } => StatusCode::INTERNAL_SERVER_ERROR,
     };
 
-    if status.is_server_error() {
-        error!(status = %status, error = %error, "request failed with server error");
-    } else if status == StatusCode::SERVICE_UNAVAILABLE {
-        warn!(status = %status, error = %error, "request failed due to unavailable dependency");
+    // Server-side failures log only the error category at error/warn level —
+    // the full `Display` chain can carry internal state such as file paths or
+    // connector configuration. The complete error stays available at debug
+    // level for operators who opt in.
+    let category = service_error_category(error);
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        warn!(status = %status, category, "request failed due to unavailable dependency");
+        debug!(status = %status, error = %error, "unavailable dependency error detail");
+    } else if status.is_server_error() {
+        error!(status = %status, category, "request failed with server error");
+        debug!(status = %status, error = %error, "server error detail");
     } else {
         info!(status = %status, error = %error, "request rejected");
     }
 
+    // 5xx responses carry only the stable category string — never the raw
+    // error chain — to avoid leaking internal state (file paths, connector
+    // configuration, etc.) to callers. 4xx responses keep their full
+    // informative messages as intentional client feedback.
+    let body_message = if status.is_server_error() {
+        category.to_owned()
+    } else {
+        error.to_string()
+    };
+
     (
         status,
         Json(ErrorResponse {
-            error: error.to_string(),
+            error: body_message,
         }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamped_limit;
+    use crate::constants::MAX_QUERY_LIMIT;
+
+    #[test]
+    fn clamped_limit_applies_default_and_upper_bound() {
+        assert_eq!(clamped_limit(None, 100), 100);
+        assert_eq!(clamped_limit(Some(5), 100), 5);
+        assert_eq!(clamped_limit(Some(MAX_QUERY_LIMIT), 100), MAX_QUERY_LIMIT);
+        assert_eq!(clamped_limit(Some(999_999_999), 100), MAX_QUERY_LIMIT);
+    }
 }

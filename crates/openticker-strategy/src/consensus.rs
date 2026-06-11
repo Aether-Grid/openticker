@@ -1,4 +1,5 @@
 use openticker_core::{IndicatorRole, IndicatorSignal, IndicatorSignalPolicy, TradeIntent};
+use thiserror::Error;
 
 use crate::{
     context::{ConsensusStrategyContext, IndicatorObservation},
@@ -7,9 +8,39 @@ use crate::{
     traits::ConsensusStrategy,
 };
 
+/// Error returned by [`ConsensusLongOnlyStrategy::new`] when threshold
+/// validation fails.
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum ConsensusConfigError {
+    /// The named threshold was negative or not finite.
+    ///
+    /// Both thresholds gate a weighted score comparison; a negative value
+    /// inverts the comparison direction and a non-finite value produces
+    /// undefined comparisons, so neither is accepted.
+    #[error("`{field}` must be finite and non-negative")]
+    InvalidThreshold {
+        /// Name of the offending field (`"entry_threshold"` or
+        /// `"exit_threshold"`).
+        field: &'static str,
+    },
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ConsensusLongOnlyStrategy {
+    /// Minimum weighted primary score required to take a long entry.
+    ///
+    /// Invariant: must be finite and non-negative. The decision logic compares
+    /// `primary_score >= entry_threshold`; a negative threshold would let a
+    /// negative (net-bearish) score open a long, which is nonsensical. Prefer
+    /// constructing via [`ConsensusLongOnlyStrategy::new`], which enforces this.
     pub entry_threshold: f64,
+    /// Minimum magnitude of a negative weighted primary score required to exit
+    /// (close) a long.
+    ///
+    /// Invariant: must be finite and non-negative. The decision logic compares
+    /// `primary_score <= -exit_threshold`; a negative threshold would invert the
+    /// comparison and exit on a positive (net-bullish) score. Prefer
+    /// constructing via [`ConsensusLongOnlyStrategy::new`], which enforces this.
     pub exit_threshold: f64,
 }
 
@@ -23,6 +54,36 @@ impl Default for ConsensusLongOnlyStrategy {
 }
 
 impl ConsensusLongOnlyStrategy {
+    /// Creates a consensus strategy with validated thresholds.
+    ///
+    /// Both thresholds gate the weighted primary score: an entry requires
+    /// `primary_score >= entry_threshold` and an exit requires
+    /// `primary_score <= -exit_threshold`. Negative or non-finite thresholds
+    /// make those comparisons behave unintuitively (e.g. a negative
+    /// `entry_threshold` would let a net-bearish score open a long), so they are
+    /// rejected here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConsensusConfigError`] when either threshold is negative or not
+    /// finite.
+    pub fn new(entry_threshold: f64, exit_threshold: f64) -> Result<Self, ConsensusConfigError> {
+        if !entry_threshold.is_finite() || entry_threshold < 0.0 {
+            return Err(ConsensusConfigError::InvalidThreshold {
+                field: "entry_threshold",
+            });
+        }
+        if !exit_threshold.is_finite() || exit_threshold < 0.0 {
+            return Err(ConsensusConfigError::InvalidThreshold {
+                field: "exit_threshold",
+            });
+        }
+        Ok(Self {
+            entry_threshold,
+            exit_threshold,
+        })
+    }
+
     fn effective_signal(observation: &IndicatorObservation<'_>) -> IndicatorSignal {
         match (observation.signal_policy, observation.signal) {
             (
@@ -148,9 +209,18 @@ impl ConsensusStrategy for ConsensusLongOnlyStrategy {
                 }
 
                 let vote = Self::signal_vote(obs.signal_policy, effective_signal);
+                // Filters are only evaluated for a non-zero direction: the
+                // `direction == 0` (no-trade) case returns earlier above, so this
+                // branch is reached only when `direction == -1` (a sell/close). The
+                // `else` arm below therefore vetoes a sell when a filter votes long
+                // (`vote > 0.0`); it never runs for `direction == 0`, even though the
+                // `vote > 0.0` comparison might read as if it could veto a no-trade
+                // decision.
                 if direction > 0 {
+                    // Entry (long): a filter voting short (`vote < 0.0`) vetoes.
                     vote < 0.0
                 } else {
+                    // Exit (`direction == -1`): a filter voting long (`vote > 0.0`) vetoes.
                     vote > 0.0
                 }
             });

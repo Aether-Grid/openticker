@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::portfolio::{AccountPortfolioSnapshot, BotPortfolioSnapshot, LanePortfolioSnapshot};
-use crate::types::{LedgerException, LedgerOwnerPath, ReservationError};
+use crate::types::{LedgerError, LedgerException, LedgerOwnerPath, ReservationError};
 use crate::util::{LEDGER_VALUE_TOLERANCE, sanitize_value};
 
 #[derive(Debug, Clone, Default)]
@@ -102,12 +102,31 @@ impl AccountLedger {
         Ok(())
     }
 
-    pub fn release_reservation(&mut self, owner: &LedgerOwnerPath, notional_usd: f64) {
-        adjust_owner_notional(
-            &mut self.lane_reserved_notional_usd,
-            owner,
-            -sanitize_value(notional_usd),
-        );
+    /// Releases previously reserved open notional for an owner path.
+    ///
+    /// The release amount must be a finite, strictly positive USD value. The
+    /// effect is clamped at a zero floor: releasing more than is currently
+    /// reserved removes the owner's reservation entirely rather than driving
+    /// the tracked total negative (reconciliation can legitimately request an
+    /// over-release due to rounding or out-of-order events), but such a valid
+    /// positive request still returns `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LedgerError::InvalidReleaseAmount` when `notional_usd` is
+    /// non-finite (`NaN`/`Inf`) or non-positive (`<= 0`). Such inputs are not
+    /// valid release amounts; rejecting them avoids silently trapping reserved
+    /// notional (the prior `sanitize_value` behavior turned them into no-ops).
+    pub fn release_reservation(
+        &mut self,
+        owner: &LedgerOwnerPath,
+        notional_usd: f64,
+    ) -> Result<(), LedgerError> {
+        if !notional_usd.is_finite() || notional_usd <= 0.0 {
+            return Err(LedgerError::InvalidReleaseAmount);
+        }
+        adjust_owner_notional(&mut self.lane_reserved_notional_usd, owner, -notional_usd);
+        Ok(())
     }
 
     pub fn reconcile_open_fill(
@@ -120,7 +139,13 @@ impl AccountLedger {
         let reserved_notional_usd = sanitize_value(reserved_notional_usd);
 
         if reserved_notional_usd > LEDGER_VALUE_TOLERANCE {
-            self.release_reservation(owner, reserved_notional_usd);
+            // `reserved_notional_usd` was sanitized above and is strictly
+            // positive and finite here, so the release can never be invalid.
+            let release_result = self.release_reservation(owner, reserved_notional_usd);
+            debug_assert!(
+                release_result.is_ok(),
+                "sanitized reserved notional must be a valid release amount"
+            );
         }
 
         if filled_notional_usd > LEDGER_VALUE_TOLERANCE {
@@ -128,12 +153,30 @@ impl AccountLedger {
         }
     }
 
-    pub fn release_position(&mut self, owner: &LedgerOwnerPath, notional_usd: f64) {
-        adjust_owner_notional(
-            &mut self.lane_open_notional_usd,
-            owner,
-            -sanitize_value(notional_usd),
-        );
+    /// Releases attributed open position notional for an owner path.
+    ///
+    /// The release amount must be a finite, strictly positive USD value. The
+    /// effect is clamped at a zero floor: releasing more than is currently
+    /// attributed removes the owner's open notional entirely rather than
+    /// driving the tracked total negative, but such a valid positive request
+    /// still returns `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LedgerError::InvalidReleaseAmount` when `notional_usd` is
+    /// non-finite (`NaN`/`Inf`) or non-positive (`<= 0`). Such inputs are not
+    /// valid release amounts; rejecting them avoids silently trapping open
+    /// notional (the prior `sanitize_value` behavior turned them into no-ops).
+    pub fn release_position(
+        &mut self,
+        owner: &LedgerOwnerPath,
+        notional_usd: f64,
+    ) -> Result<(), LedgerError> {
+        if !notional_usd.is_finite() || notional_usd <= 0.0 {
+            return Err(LedgerError::InvalidReleaseAmount);
+        }
+        adjust_owner_notional(&mut self.lane_open_notional_usd, owner, -notional_usd);
+        Ok(())
     }
 
     #[must_use]
@@ -336,7 +379,9 @@ fn adjust_owner_notional(
 #[cfg(test)]
 mod tests {
     use super::AccountLedger;
-    use crate::{LedgerException, LedgerExceptionKind, LedgerOwnerPath, ReservationError};
+    use crate::{
+        LedgerError, LedgerException, LedgerExceptionKind, LedgerOwnerPath, ReservationError,
+    };
 
     #[test]
     fn effective_cap_uses_declared_total_until_live_balance_is_lower() {
@@ -408,7 +453,7 @@ mod tests {
         let mut ledger = AccountLedger::new(1_000.0);
         ledger.replace_lane_open_notional([(owner_a.clone(), 100.0), (owner_b.clone(), 50.0)]);
         assert!(ledger.try_reserve_open(&owner_c, 25.0, 100.0).is_ok());
-        ledger.release_reservation(&owner_c, 25.0);
+        assert!(ledger.release_reservation(&owner_c, 25.0).is_ok());
 
         let snapshots = ledger.lane_snapshots();
         assert_eq!(snapshots.len(), 2);
@@ -422,8 +467,8 @@ mod tests {
         let mut ledger = AccountLedger::new(1_000.0);
 
         assert!(ledger.try_reserve_open(&owner, 100.0, 100.0).is_ok());
-        ledger.release_reservation(&owner, 100.0 - 5e-10);
-        ledger.release_reservation(&owner, 1.0);
+        assert!(ledger.release_reservation(&owner, 100.0 - 5e-10).is_ok());
+        assert!(ledger.release_reservation(&owner, 1.0).is_ok());
 
         assert!(ledger.total_reserved_open_notional_usd().abs() < 1e-6);
         assert!(ledger.lane_snapshots().is_empty());
@@ -446,5 +491,71 @@ mod tests {
             ledger.try_reserve_open(&LedgerOwnerPath::new("acct", "bot-c", "NVDA"), 200.0, 30.0,),
             Err(ReservationError::AccountCapacityExceeded)
         );
+    }
+
+    #[test]
+    fn release_reservation_rejects_non_positive_and_non_finite_amounts() {
+        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
+        let mut ledger = AccountLedger::new(1_000.0);
+        assert!(ledger.try_reserve_open(&owner, 400.0, 100.0).is_ok());
+
+        for invalid in [-100.0, 0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                ledger.release_reservation(&owner, invalid),
+                Err(LedgerError::InvalidReleaseAmount),
+                "expected rejection for release amount {invalid}"
+            );
+        }
+
+        // Rejected releases must leave the reservation untouched (no silent
+        // no-op that traps notional, and no accidental mutation).
+        assert!((ledger.total_reserved_open_notional_usd() - 400.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn release_position_rejects_non_positive_and_non_finite_amounts() {
+        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
+        let mut ledger = AccountLedger::new(1_000.0);
+        ledger.replace_lane_open_notional([(owner.clone(), 300.0)]);
+
+        for invalid in [-50.0, 0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                ledger.release_position(&owner, invalid),
+                Err(LedgerError::InvalidReleaseAmount),
+                "expected rejection for release amount {invalid}"
+            );
+        }
+
+        assert!((ledger.total_attributed_open_notional_usd() - 300.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn valid_positive_release_succeeds_and_decrements() {
+        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
+        let mut ledger = AccountLedger::new(1_000.0);
+        assert!(ledger.try_reserve_open(&owner, 400.0, 100.0).is_ok());
+
+        assert!(ledger.release_reservation(&owner, 150.0).is_ok());
+        assert!((ledger.total_reserved_open_notional_usd() - 250.0).abs() < 1e-6);
+
+        ledger.replace_lane_open_notional([(owner.clone(), 300.0)]);
+        assert!(ledger.release_position(&owner, 120.0).is_ok());
+        assert!((ledger.total_attributed_open_notional_usd() - 180.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn over_release_clamps_at_zero_floor_and_still_returns_ok() {
+        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
+        let mut ledger = AccountLedger::new(1_000.0);
+        assert!(ledger.try_reserve_open(&owner, 100.0, 100.0).is_ok());
+
+        // Releasing more than is reserved is a valid positive request: it must
+        // succeed and clamp the tracked total at zero (never go negative).
+        assert!(ledger.release_reservation(&owner, 500.0).is_ok());
+        assert!(ledger.total_reserved_open_notional_usd().abs() < 1e-6);
+
+        ledger.replace_lane_open_notional([(owner.clone(), 80.0)]);
+        assert!(ledger.release_position(&owner, 500.0).is_ok());
+        assert!(ledger.total_attributed_open_notional_usd().abs() < 1e-6);
     }
 }

@@ -55,6 +55,14 @@
     --ui-border: var(--color-hairline);
     --ui-border-muted: var(--color-hairline);
   }
+
+  button:not(:disabled):not([aria-disabled='true']),
+  [role='button']:not([aria-disabled='true']):not([data-disabled]),
+  [role='menuitem']:not([aria-disabled='true']):not([data-disabled]),
+  [role='option']:not([aria-disabled='true']):not([data-disabled]),
+  [role='tab']:not([aria-disabled='true']):not([data-disabled]) {
+    cursor: pointer;
+  }
 }
 
 @layer utilities {

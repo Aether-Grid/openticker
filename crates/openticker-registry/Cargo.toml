@@ -14,3 +14,4 @@ indicators = ["dep:openticker-indicators"]
 openticker-signals = { path = "../openticker-signals" }
 openticker-indicators = { path = "../openticker-indicators", optional = true }
 toml.workspace = true
+tracing.workspace = true

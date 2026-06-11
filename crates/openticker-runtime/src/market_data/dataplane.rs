@@ -9,6 +9,25 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 const CLOSE_POLL_RETRY_MS: u64 = 2_000;
+const MAX_CONFIRMED_POLL_INTERVAL_MS: u64 = 60_000;
+
+/// Derives the steady-state confirmed-bar polling interval for an instance
+/// stream.
+///
+/// Confirmed bars only change once per timeframe and the close-window
+/// fast-poll path (every [`CLOSE_POLL_RETRY_MS`] within the post-close grace
+/// window) picks up freshly closed bars within seconds, so the steady-state
+/// cadence scales with the timeframe instead of polling the connector at the
+/// configured intrabar interval. Without this, dozens of high-timeframe
+/// streams exhaust provider REST budgets (e.g. Binance `-1003` IP bans).
+fn effective_confirmed_polling_interval_ms(
+    configured_ms: u64,
+    timeframe: openticker_core::Timeframe,
+) -> u64 {
+    let timeframe_ms = u64::try_from(timeframe.duration().as_millis()).unwrap_or(u64::MAX);
+    let derived_ms = (timeframe_ms / 4).min(MAX_CONFIRMED_POLL_INTERVAL_MS);
+    configured_ms.max(derived_ms)
+}
 
 impl Runtime {
     #[must_use]
@@ -28,7 +47,10 @@ impl Runtime {
                     timeframe: instance.config.timeframe,
                 },
                 retention: self.catalog.data_plane_config.default_retention,
-                polling_interval_ms: instance.config.polling_interval_ms,
+                polling_interval_ms: effective_confirmed_polling_interval_ms(
+                    instance.config.polling_interval_ms,
+                    instance.config.timeframe,
+                ),
                 close_poll_retry_ms: Some(CLOSE_POLL_RETRY_MS),
                 close_poll_grace_ms: Some(instance.risk_limits.stale_data_ms),
                 preview_enabled: instance_preview_enabled(instance),
@@ -137,6 +159,31 @@ mod tests {
     use openticker_core::Timeframe;
 
     #[test]
+    fn instance_stream_polling_cadence_scales_with_timeframe() {
+        // Confirmed bars only change once per timeframe; the steady-state
+        // REST cadence must not hammer the connector at the intrabar interval.
+        let mut config = fixture_bundle();
+        config.instances[0].polling_interval_ms = 1_000;
+        config.instances[0].timeframe = Timeframe::H4;
+        let streams = Runtime::from_config(&config).effective_streams_for_dataplane();
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].polling_interval_ms, 60_000);
+
+        let mut config = fixture_bundle();
+        config.instances[0].polling_interval_ms = 1_000;
+        config.instances[0].timeframe = Timeframe::M1;
+        let streams = Runtime::from_config(&config).effective_streams_for_dataplane();
+        assert_eq!(streams[0].polling_interval_ms, 15_000);
+
+        // A slower configured interval is respected as-is.
+        let mut config = fixture_bundle();
+        config.instances[0].polling_interval_ms = 120_000;
+        config.instances[0].timeframe = Timeframe::M1;
+        let streams = Runtime::from_config(&config).effective_streams_for_dataplane();
+        assert_eq!(streams[0].polling_interval_ms, 120_000);
+    }
+
+    #[test]
     fn effective_streams_for_dataplane_merges_instances_and_watchlist() {
         let mut config = fixture_bundle();
         let mut twin = config.instances[0].clone();
@@ -175,7 +222,9 @@ mod tests {
             .find(|spec| spec.key.symbol == "AAPL")
             .expect("AAPL stream should exist");
         assert_eq!(aapl.retention, 1_000);
-        assert_eq!(aapl.polling_interval_ms, 1_000);
+        // Instances contribute the timeframe-derived cadence (15s for M1);
+        // the explicit 2s watchlist entry wins the merge.
+        assert_eq!(aapl.polling_interval_ms, 2_000);
         assert_eq!(aapl.close_poll_retry_ms, Some(2_000));
         assert_eq!(aapl.close_poll_grace_ms, Some(3_000));
         assert_eq!(

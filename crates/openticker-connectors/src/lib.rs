@@ -20,19 +20,20 @@ pub use types::{
     ConnectorPreviewStreamEvent, ConnectorPreviewStreamSession, ConnectorPrivateAccountEvent,
     ConnectorPrivateBalance, ConnectorPrivateStreamEvent, ConnectorResiliencePolicy,
     ConnectorResilienceState, ConnectorRole, ConnectorStatus, ConnectorSymbolConstraints,
-    PreviewStreamConnectionState,
+    PREVIEW_STREAM_COMMAND_CAPACITY, PREVIEW_STREAM_EVENT_CAPACITY, PreviewStreamConnectionState,
 };
 
 pub(crate) use helpers::{
     default_blocking_http_client, deterministic_remote_client_order_id, format_decimal_quantity,
-    resolve_secret_env_value, run_in_blocking_thread, unix_now_ms,
+    rate_limit_error, resolve_secret_env_value, retry_after_header, run_in_blocking_thread,
+    sanitize_symbol_for_error, unix_now_ms,
 };
 
 mod connectors;
 pub use connectors::{alpaca, binance};
 
 mod registry;
-pub use registry::ConnectorRegistry;
+pub use registry::{ConnectorClientHandle, ConnectorRegistry};
 
 #[cfg(test)]
 mod tests;

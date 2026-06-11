@@ -5,7 +5,7 @@ mod metadata;
 mod single_indicator;
 mod traits;
 
-pub use consensus::ConsensusLongOnlyStrategy;
+pub use consensus::{ConsensusConfigError, ConsensusLongOnlyStrategy};
 pub use context::{ConsensusStrategyContext, IndicatorObservation, StrategyContext};
 pub use decision::StrategyDecision;
 pub use single_indicator::SingleIndicatorLongOnlyStrategy;

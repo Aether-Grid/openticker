@@ -11,6 +11,7 @@ pub struct DataPlaneMetrics {
     fetches_total: AtomicU64,
     completions_total: AtomicU64,
     completion_errors_total: AtomicU64,
+    dropped_error_records_total: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -23,6 +24,11 @@ pub struct DataPlaneMetricsSnapshot {
     pub fetches_total: u64,
     pub completions_total: u64,
     pub completion_errors_total: u64,
+    /// Count of fetch-error or error-callback failures that could not be
+    /// recorded against their stream (e.g. the stream was unregistered between
+    /// selection and error handling). Surfaces failures that would otherwise
+    /// be silently dropped by the polling loop.
+    pub dropped_error_records_total: u64,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +94,14 @@ impl DataPlaneMetrics {
         }
     }
 
+    pub(crate) fn record_dropped_error_record(&self) {
+        let _ = self.dropped_error_records_total.fetch_update(
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+            |total| Some(total.saturating_add(1)),
+        );
+    }
+
     #[must_use]
     pub(crate) fn snapshot(&self) -> DataPlaneMetricsSnapshot {
         DataPlaneMetricsSnapshot {
@@ -99,6 +113,9 @@ impl DataPlaneMetrics {
             fetches_total: self.fetches_total.load(AtomicOrdering::Relaxed),
             completions_total: self.completions_total.load(AtomicOrdering::Relaxed),
             completion_errors_total: self.completion_errors_total.load(AtomicOrdering::Relaxed),
+            dropped_error_records_total: self
+                .dropped_error_records_total
+                .load(AtomicOrdering::Relaxed),
         }
     }
 }
@@ -138,14 +155,67 @@ impl AtomicLatencyMetric {
         LatencyMetricSnapshot {
             last_ms: self.last_ms.load(AtomicOrdering::Relaxed),
             max_ms: self.max_ms.load(AtomicOrdering::Relaxed),
+            // No samples means "no data": return 0.0 explicitly rather than
+            // dividing by a defaulted sample count, which would otherwise
+            // mask the zero-sample case as a misleading average.
             avg_ms: if samples == 0 {
                 0.0
             } else {
-                let total = total_ms.to_string().parse::<f64>().unwrap_or(0.0);
-                let samples = samples.to_string().parse::<f64>().unwrap_or(1.0);
-                total / samples
+                // Direct float division. `f64` has a 53-bit significand, so
+                // millisecond latency sums and sample counts well below 2^53
+                // convert without meaningful precision loss; the previous
+                // String round-trip was both lossy and slow.
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    total_ms as f64 / samples as f64
+                }
             },
             samples,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::float_cmp)]
+    use super::DataPlaneMetrics;
+    use std::time::Duration;
+
+    #[test]
+    fn average_latency_is_zero_when_no_samples_recorded() {
+        let metrics = DataPlaneMetrics::default();
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.cycle_latency.samples, 0);
+        // Zero samples must report a 0.0 average, not a value derived from a
+        // defaulted sample count.
+        assert_eq!(snapshot.cycle_latency.avg_ms, 0.0);
+    }
+
+    #[test]
+    fn average_latency_divides_total_by_sample_count() {
+        let metrics = DataPlaneMetrics::default();
+        metrics.record_cycle_duration(Duration::from_millis(10));
+        metrics.record_cycle_duration(Duration::from_millis(20));
+        metrics.record_cycle_duration(Duration::from_millis(30));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.cycle_latency.samples, 3);
+        assert_eq!(snapshot.cycle_latency.last_ms, 30);
+        assert_eq!(snapshot.cycle_latency.max_ms, 30);
+        // (10 + 20 + 30) / 3 == 20.0, computed via direct float division.
+        assert_eq!(snapshot.cycle_latency.avg_ms, 20.0);
+    }
+
+    #[test]
+    fn average_latency_can_be_fractional() {
+        let metrics = DataPlaneMetrics::default();
+        metrics.record_cycle_duration(Duration::from_millis(1));
+        metrics.record_cycle_duration(Duration::from_millis(2));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.cycle_latency.samples, 2);
+        // 3 / 2 == 1.5 — the old String round-trip could not represent this
+        // precisely for non-integer averages.
+        assert_eq!(snapshot.cycle_latency.avg_ms, 1.5);
     }
 }

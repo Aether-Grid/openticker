@@ -3,7 +3,7 @@ use super::*;
 
 impl RuntimeJournal for InMemoryRuntimeJournal {
     fn append_event(&self, event: EventWrite) -> Result<(), StorageError> {
-        let mut events = lock_mutex(&self.events, "events")?;
+        let mut events = lock_mutex(&self.events, "events");
         let id = events.last().map_or(1, |entry| entry.id.saturating_add(1));
         events.push(RuntimeEvent {
             id,
@@ -22,7 +22,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let events = lock_mutex(&self.events, "events")?;
+        let events = lock_mutex(&self.events, "events");
         let start = events.len().saturating_sub(limit);
         Ok(events[start..].to_vec())
     }
@@ -36,7 +36,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let events = lock_mutex(&self.events, "events")?;
+        let events = lock_mutex(&self.events, "events");
         let mut filtered = events
             .iter()
             .filter(|event| event.scope == scope)
@@ -55,7 +55,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let events = lock_mutex(&self.events, "events")?;
+        let events = lock_mutex(&self.events, "events");
         let mut filtered = events
             .iter()
             .filter(|event| event.entity_id.as_deref() == Some(entity_id))
@@ -75,7 +75,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let events = lock_mutex(&self.events, "events")?;
+        let events = lock_mutex(&self.events, "events");
         let mut filtered = events
             .iter()
             .filter(|event| event.scope == scope && event.entity_id.as_deref() == Some(entity_id))
@@ -86,7 +86,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn append_signal(&self, signal: SignalWrite) -> Result<(), StorageError> {
-        let mut signals = lock_mutex(&self.signals, "signals")?;
+        let mut signals = lock_mutex(&self.signals, "signals");
         let id = signals.last().map_or(1, |entry| entry.id.saturating_add(1));
         signals.push(SignalRecord {
             id,
@@ -104,11 +104,11 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_signals(&self, limit: usize) -> Result<Vec<SignalRecord>, StorageError> {
-        recent_records(&self.signals, "signals", limit)
+        Ok(recent_records(&self.signals, "signals", limit))
     }
 
     fn append_intent(&self, intent: IntentWrite) -> Result<(), StorageError> {
-        let mut intents = lock_mutex(&self.intents, "intents")?;
+        let mut intents = lock_mutex(&self.intents, "intents");
         let id = intents.last().map_or(1, |entry| entry.id.saturating_add(1));
         intents.push(IntentRecord {
             id,
@@ -127,11 +127,11 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_intents(&self, limit: usize) -> Result<Vec<IntentRecord>, StorageError> {
-        recent_records(&self.intents, "intents", limit)
+        Ok(recent_records(&self.intents, "intents", limit))
     }
 
     fn append_risk_decision(&self, decision: RiskDecisionWrite) -> Result<(), StorageError> {
-        let mut risk_decisions = lock_mutex(&self.risk_decisions, "risk decisions")?;
+        let mut risk_decisions = lock_mutex(&self.risk_decisions, "risk decisions");
         let id = risk_decisions
             .last()
             .map_or(1, |entry| entry.id.saturating_add(1));
@@ -150,11 +150,15 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_risk_decisions(&self, limit: usize) -> Result<Vec<RiskDecisionRecord>, StorageError> {
-        recent_records(&self.risk_decisions, "risk decisions", limit)
+        Ok(recent_records(
+            &self.risk_decisions,
+            "risk decisions",
+            limit,
+        ))
     }
 
     fn append_order(&self, order: OrderWrite) -> Result<(), StorageError> {
-        let mut orders = lock_mutex(&self.orders, "orders")?;
+        let mut orders = lock_mutex(&self.orders, "orders");
         if orders.iter().any(|existing| {
             existing.bot_id == order.bot_id
                 && existing.symbol.as_deref() == Some(order.symbol.as_str())
@@ -180,7 +184,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_orders(&self, limit: usize) -> Result<Vec<OrderRecord>, StorageError> {
-        recent_records(&self.orders, "orders", limit)
+        Ok(recent_records(&self.orders, "orders", limit))
     }
 
     fn recent_orders_for_bot(
@@ -192,7 +196,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let orders = lock_mutex(&self.orders, "orders")?;
+        let orders = lock_mutex(&self.orders, "orders");
         let mut filtered = orders
             .iter()
             .filter(|order| order.bot_id == bot_id)
@@ -206,7 +210,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
         &self,
         client_order_id: &str,
     ) -> Result<Vec<OrderRecord>, StorageError> {
-        let orders = lock_mutex(&self.orders, "orders")?;
+        let orders = lock_mutex(&self.orders, "orders");
         Ok(orders
             .iter()
             .filter(|order| order.client_order_id == client_order_id)
@@ -215,7 +219,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn append_fill(&self, fill: FillWrite) -> Result<(), StorageError> {
-        let mut fills = lock_mutex(&self.fills, "fills")?;
+        let mut fills = lock_mutex(&self.fills, "fills");
         if fills.iter().any(|existing| {
             existing.bot_id == fill.bot_id
                 && existing.symbol.as_deref() == Some(fill.symbol.as_str())
@@ -246,7 +250,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_fills(&self, limit: usize) -> Result<Vec<FillRecord>, StorageError> {
-        recent_records(&self.fills, "fills", limit)
+        Ok(recent_records(&self.fills, "fills", limit))
     }
 
     fn recent_fills_for_bot(
@@ -258,7 +262,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let fills = lock_mutex(&self.fills, "fills")?;
+        let fills = lock_mutex(&self.fills, "fills");
         let mut filtered = fills
             .iter()
             .filter(|fill| fill.bot_id == bot_id)
@@ -269,7 +273,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn append_position(&self, position: PositionWrite) -> Result<(), StorageError> {
-        let mut positions = lock_mutex(&self.positions, "positions")?;
+        let mut positions = lock_mutex(&self.positions, "positions");
         let id = positions
             .last()
             .map_or(1, |entry| entry.id.saturating_add(1));
@@ -303,7 +307,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_positions(&self, limit: usize) -> Result<Vec<PositionRecord>, StorageError> {
-        recent_records(&self.positions, "positions", limit)
+        Ok(recent_records(&self.positions, "positions", limit))
     }
 
     fn recent_positions_for_bot(
@@ -315,7 +319,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let positions = lock_mutex(&self.positions, "positions")?;
+        let positions = lock_mutex(&self.positions, "positions");
         let mut filtered = positions
             .iter()
             .filter(|position| position.bot_id == bot_id)
@@ -326,7 +330,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn append_cycle_trace(&self, trace: CycleTraceWrite) -> Result<(), StorageError> {
-        let mut traces = lock_mutex(&self.cycle_traces, "cycle traces")?;
+        let mut traces = lock_mutex(&self.cycle_traces, "cycle traces");
         if traces
             .iter()
             .any(|existing| existing.trace_id == trace.trace_id)
@@ -365,7 +369,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let traces = lock_mutex(&self.cycle_traces, "cycle traces")?;
+        let traces = lock_mutex(&self.cycle_traces, "cycle traces");
         let mut filtered = traces
             .iter()
             .filter(|trace| trace.bot_id == bot_id)
@@ -380,7 +384,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn cycle_trace_by_id(&self, trace_id: &str) -> Result<Option<CycleTraceRecord>, StorageError> {
-        let traces = lock_mutex(&self.cycle_traces, "cycle traces")?;
+        let traces = lock_mutex(&self.cycle_traces, "cycle traces");
         Ok(traces
             .iter()
             .find(|trace| trace.trace_id == trace_id)
@@ -391,7 +395,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
         &self,
         bot_id: &str,
     ) -> Result<Option<PositionRecord>, StorageError> {
-        let positions = lock_mutex(&self.positions, "positions")?;
+        let positions = lock_mutex(&self.positions, "positions");
         Ok(positions
             .iter()
             .rev()
@@ -404,7 +408,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
         bot_id: &str,
         symbol: &str,
     ) -> Result<Option<PositionRecord>, StorageError> {
-        let positions = lock_mutex(&self.positions, "positions")?;
+        let positions = lock_mutex(&self.positions, "positions");
         Ok(positions
             .iter()
             .rev()
@@ -415,7 +419,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn append_reconciliation(&self, record: ReconciliationWrite) -> Result<(), StorageError> {
-        let mut reconciliations = lock_mutex(&self.reconciliations, "reconciliations")?;
+        let mut reconciliations = lock_mutex(&self.reconciliations, "reconciliations");
         let id = reconciliations
             .last()
             .map_or(1, |entry| entry.id.saturating_add(1));
@@ -439,7 +443,11 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
         &self,
         limit: usize,
     ) -> Result<Vec<ReconciliationRecord>, StorageError> {
-        recent_records(&self.reconciliations, "reconciliations", limit)
+        Ok(recent_records(
+            &self.reconciliations,
+            "reconciliations",
+            limit,
+        ))
     }
 
     fn recent_reconciliations_for_bot(
@@ -451,7 +459,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
             return Ok(Vec::new());
         }
 
-        let reconciliations = lock_mutex(&self.reconciliations, "reconciliations")?;
+        let reconciliations = lock_mutex(&self.reconciliations, "reconciliations");
         let mut filtered = reconciliations
             .iter()
             .filter(|record| record.bot_id == bot_id)
@@ -465,7 +473,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
         &self,
         bot_id: &str,
     ) -> Result<Option<ReconciliationRecord>, StorageError> {
-        let reconciliations = lock_mutex(&self.reconciliations, "reconciliations")?;
+        let reconciliations = lock_mutex(&self.reconciliations, "reconciliations");
         Ok(reconciliations
             .iter()
             .rev()
@@ -478,7 +486,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
         bot_id: &str,
         symbol: &str,
     ) -> Result<Option<ReconciliationRecord>, StorageError> {
-        let reconciliations = lock_mutex(&self.reconciliations, "reconciliations")?;
+        let reconciliations = lock_mutex(&self.reconciliations, "reconciliations");
         Ok(reconciliations
             .iter()
             .rev()
@@ -487,7 +495,7 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn append_bot_event(&self, event: BotEventWrite) -> Result<(), StorageError> {
-        let mut events = lock_mutex(&self.bot_events, "bot events")?;
+        let mut events = lock_mutex(&self.bot_events, "bot events");
         let id = events.last().map_or(1, |entry| entry.id.saturating_add(1));
         events.push(BotEventRecord {
             id,
@@ -500,11 +508,11 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_bot_events(&self, limit: usize) -> Result<Vec<BotEventRecord>, StorageError> {
-        recent_records(&self.bot_events, "bot events", limit)
+        Ok(recent_records(&self.bot_events, "bot events", limit))
     }
 
     fn append_service_event(&self, event: ServiceEventWrite) -> Result<(), StorageError> {
-        let mut events = lock_mutex(&self.service_events, "service events")?;
+        let mut events = lock_mutex(&self.service_events, "service events");
         let id = events.last().map_or(1, |entry| entry.id.saturating_add(1));
         events.push(ServiceEventRecord {
             id,
@@ -516,11 +524,15 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn recent_service_events(&self, limit: usize) -> Result<Vec<ServiceEventRecord>, StorageError> {
-        recent_records(&self.service_events, "service events", limit)
+        Ok(recent_records(
+            &self.service_events,
+            "service events",
+            limit,
+        ))
     }
 
     fn upsert_bot_snapshot(&self, snapshot: BotSnapshotWrite) -> Result<(), StorageError> {
-        let mut snapshots = lock_mutex(&self.bot_snapshots, "bot snapshots")?;
+        let mut snapshots = lock_mutex(&self.bot_snapshots, "bot snapshots");
         snapshots.insert(
             snapshot.bot_id.clone(),
             BotSnapshot {
@@ -535,37 +547,36 @@ impl RuntimeJournal for InMemoryRuntimeJournal {
     }
 
     fn load_bot_snapshots(&self) -> Result<Vec<BotSnapshot>, StorageError> {
-        let snapshots = lock_mutex(&self.bot_snapshots, "bot snapshots")?;
+        let snapshots = lock_mutex(&self.bot_snapshots, "bot snapshots");
         let mut values = snapshots.values().cloned().collect::<Vec<_>>();
         values.sort_by(|left, right| left.bot_id.cmp(&right.bot_id));
         Ok(values)
     }
 
     fn prune_bots_except(&self, active_bot_ids: &HashSet<String>) -> Result<(), StorageError> {
-        let mut events = lock_mutex(&self.events, "events")?;
+        let mut events = lock_mutex(&self.events, "events");
         events.retain(|event| match event.entity_id.as_deref() {
             Some(bot_id) => active_bot_ids.contains(bot_id),
             None => true,
         });
 
-        lock_mutex(&self.signals, "signals")?
+        lock_mutex(&self.signals, "signals")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.intents, "intents")?
+        lock_mutex(&self.intents, "intents")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.risk_decisions, "risk decisions")?
+        lock_mutex(&self.risk_decisions, "risk decisions")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.orders, "orders")?
+        lock_mutex(&self.orders, "orders").retain(|record| active_bot_ids.contains(&record.bot_id));
+        lock_mutex(&self.fills, "fills").retain(|record| active_bot_ids.contains(&record.bot_id));
+        lock_mutex(&self.positions, "positions")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.fills, "fills")?.retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.positions, "positions")?
+        lock_mutex(&self.cycle_traces, "cycle traces")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.cycle_traces, "cycle traces")?
+        lock_mutex(&self.reconciliations, "reconciliations")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.reconciliations, "reconciliations")?
+        lock_mutex(&self.bot_events, "bot events")
             .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.bot_events, "bot events")?
-            .retain(|record| active_bot_ids.contains(&record.bot_id));
-        lock_mutex(&self.bot_snapshots, "bot snapshots")?
+        lock_mutex(&self.bot_snapshots, "bot snapshots")
             .retain(|bot_id, _| active_bot_ids.contains(bot_id));
 
         Ok(())

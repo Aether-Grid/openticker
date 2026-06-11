@@ -89,3 +89,13 @@ pub enum ReservationError {
     BotCapacityExceeded,
     AccountCapacityExceeded,
 }
+
+/// Error returned by mutating ledger accounting operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerError {
+    /// The supplied release amount was not a finite, strictly positive USD
+    /// value. Releases must subtract a concrete amount, so non-finite
+    /// (`NaN`/`Inf`) and non-positive (`<= 0`) inputs are rejected instead of
+    /// being silently sanitized to zero (which would trap reserved notional).
+    InvalidReleaseAmount,
+}

@@ -41,6 +41,7 @@ clap = { version = "4.5.50", features = ["derive"] }
 crossterm = "0.29.0"
 dotenvy = "0.15.7"
 notify = "8"
+percent-encoding = "2.3.1"
 ratatui = "0.29.0"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = "0.37.0"
@@ -54,6 +55,7 @@ tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json", "time"] }
+url = "2.5.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

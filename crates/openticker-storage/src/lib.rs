@@ -2,7 +2,8 @@ use rusqlite::{Connection, OpenFlags, params, params_from_iter};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, atomic::AtomicUsize};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -647,6 +648,16 @@ pub trait RuntimeJournal: std::fmt::Debug + Send + Sync {
 
     /// Removes persisted rows for bot ids that are no longer configured.
     ///
+    /// All bot-scoped records (signals, intents, risk decisions, orders,
+    /// fills, positions, cycle traces, reconciliations, bot events, and bot
+    /// snapshots) whose bot id is not in `active_bot_ids` are deleted, as are
+    /// runtime events tied to a pruned entity. Runtime events without an
+    /// entity id (global/service events) are always retained.
+    ///
+    /// An **empty** `active_bot_ids` set means no bots are configured and
+    /// therefore prunes ALL bot-scoped data. Both backends implement these
+    /// semantics; `tests/backend_parity.rs` pins them.
+    ///
     /// # Errors
     ///
     /// Returns [`StorageError`] when the backend cleanup fails.
@@ -677,35 +688,64 @@ pub struct SqliteRuntimeJournal {
     next_read_connection: AtomicUsize,
 }
 
-fn recent_records<T: Clone>(
-    mutex: &Mutex<Vec<T>>,
-    label: &'static str,
-    limit: usize,
-) -> Result<Vec<T>, StorageError> {
+fn recent_records<T: Clone>(mutex: &Mutex<Vec<T>>, label: &'static str, limit: usize) -> Vec<T> {
     if limit == 0 {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
-    let records = lock_mutex(mutex, label)?;
+    let records = lock_mutex(mutex, label);
     let start = records.len().saturating_sub(limit);
-    Ok(records[start..].to_vec())
+    records[start..].to_vec()
 }
 
-fn lock_mutex<'a, T>(
-    mutex: &'a Mutex<T>,
-    label: &'static str,
-) -> Result<MutexGuard<'a, T>, StorageError> {
-    mutex
-        .lock()
-        .map_err(|_| StorageError::Internal(format!("{label} mutex is poisoned")))
+fn lock_mutex<'a, T>(mutex: &'a Mutex<T>, label: &'static str) -> MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            // Workspace policy: recover from poisoning and log instead of
+            // failing forever. A poisoned mutex only means another thread
+            // panicked while holding the guard; the protected state remains
+            // usable (a SQLite connection stays consistent after a Rust-side
+            // panic — at worst an open transaction was rolled back).
+            mutex.clear_poison();
+            tracing::warn!("{label} mutex was poisoned; clearing poison and recovering the lock");
+            poisoned.into_inner()
+        }
+    }
 }
 
-fn now_timestamp_ms() -> i64 {
-    let elapsed = SystemTime::now()
+/// Last timestamp handed out by [`now_timestamp_ms`], used as a monotonic floor.
+static LAST_TIMESTAMP_MS: AtomicI64 = AtomicI64::new(0);
+
+/// Applies a monotonic floor to a raw wall-clock reading.
+///
+/// `raw` is the current wall-clock timestamp in milliseconds, or `None` when
+/// the system clock is unavailable (e.g. it reports a time before the UNIX
+/// epoch). The returned value never decreases across calls sharing the same
+/// `floor` cell: a regressed or unavailable clock yields the last known good
+/// timestamp instead of going backwards or collapsing to zero. Note that if
+/// the clock has never been readable since process start, the floor is still 0
+/// and that initial zero value will be returned.
+fn monotonic_timestamp_ms(floor: &AtomicI64, raw: Option<i64>) -> i64 {
+    match raw {
+        Some(raw) => floor.fetch_max(raw, Ordering::Relaxed).max(raw),
+        None => floor.load(Ordering::Relaxed),
+    }
+}
+
+/// Returns the current wall-clock time in milliseconds since the UNIX epoch,
+/// clamped to never go backwards within this process.
+///
+/// Granularity note: this feeds the `created_at_ms` fields on journal records,
+/// which therefore cannot distinguish records created within the same
+/// millisecond. Where exact insertion order matters, the autoincrement `id`
+/// column is the tiebreaker.
+pub(crate) fn now_timestamp_ms() -> i64 {
+    let raw = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
-    let millis = elapsed.as_millis();
-    i64::try_from(millis).unwrap_or(i64::MAX)
+        .ok()
+        .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX));
+    monotonic_timestamp_ms(&LAST_TIMESTAMP_MS, raw)
 }
 
 #[derive(Debug, Error)]

@@ -1,3 +1,15 @@
+//! Externally-exposed Axum HTTP API and embedded dashboard server.
+//!
+//! # Authentication
+//!
+//! Bearer-token authentication is opt-in via the `OPENTICKER_API_TOKEN`
+//! environment variable (see [`API_TOKEN_ENV`]), read at server startup by
+//! [`serve`]. When set and non-empty, every endpoint requires
+//! `Authorization: Bearer <token>` except health/readiness/metrics probes
+//! and the embedded dashboard SPA assets; with a token configured, the
+//! served dashboard cannot call the API itself. When unset or empty, the
+//! API is unauthenticated (localhost development) and a warning is logged.
+
 mod config_ops;
 mod config_watcher;
 mod config_write_handlers;
@@ -23,7 +35,7 @@ pub use constants::{
     LEDGER_PATH, METRICS_PATH, OPENAPI_PATH, ORDERS_PATH, POSITIONS_PATH, READY_PATH,
     RECONCILIATIONS_PATH, RISK_DECISIONS_PATH, SERVICE_STATUS_PATH, SIGNALS_PATH,
 };
-pub use router::build_router;
+pub use router::{API_TOKEN_ENV, build_router, build_router_with_token};
 pub use runtime::{load_http_state, serve};
 pub use state::{HealthResponse, HttpState, ReadyResponse};
 
@@ -59,6 +71,12 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tower::util::ServiceExt;
 
+    /// Upper bound when collecting response bodies in tests (16 MB). Kept
+    /// explicit instead of `usize::MAX` so that response-size discipline is
+    /// enforced if streaming or otherwise unbounded endpoints are ever added:
+    /// a runaway body fails the test rather than exhausting memory.
+    const MAX_TEST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
     #[tokio::test]
     async fn dashboard_root_returns_html() {
         let app = build_router(fixture_state());
@@ -68,7 +86,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("OpenTicker"));
         assert!(html.contains("id=\"__nuxt\""));
@@ -88,7 +108,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("OpenTicker"));
     }
@@ -122,7 +144,9 @@ mod tests {
                 StatusCode::OK,
                 "path {path} did not return OK"
             );
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+                .await
+                .unwrap();
             let html = String::from_utf8(body.to_vec()).unwrap();
             assert!(html.contains("OpenTicker"));
         }
@@ -142,7 +166,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("OpenTicker"));
     }
@@ -201,6 +227,235 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ui_asset_path_traversal_returns_not_found() {
+        let app = build_router(fixture_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/_nuxt/../index.html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    const TEST_API_TOKEN: &str = "secret-test-token";
+
+    #[tokio::test]
+    async fn api_returns_unauthorized_without_valid_token_when_auth_enabled() {
+        let app = build_router_with_token(fixture_state(), Some(TEST_API_TOKEN.to_owned()));
+
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(SERVICE_STATUS_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(missing.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("bearer token")
+        );
+
+        let wrong = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(SERVICE_STATUS_PATH)
+                    .header("authorization", "Bearer not-the-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+
+        let blocked_post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/bots/aapl/stop")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked_post.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri(SERVICE_STATUS_PATH)
+                    .header("authorization", format!("Bearer {TEST_API_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_exempts_probes_and_dashboard_assets() {
+        let app = build_router_with_token(fixture_state(), Some(TEST_API_TOKEN.to_owned()));
+
+        let exempt_paths = [
+            HEALTH_PATH,
+            READY_PATH,
+            METRICS_PATH,
+            "/",
+            DASHBOARD_PATH,
+            "/favicon.ico",
+            "/some/deep/spa/route",
+        ];
+        for path in exempt_paths {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "path {path} should be reachable without a token"
+            );
+        }
+
+        // Asset routes are exempt as well: a missing asset must be a plain
+        // 404, never a 401.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/_nuxt/does-not-exist.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn api_open_when_token_unset_or_empty() {
+        let app = build_router(fixture_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(SERVICE_STATUS_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let app = build_router_with_token(fixture_state(), Some(String::new()));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(SERVICE_STATUS_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn openapi_endpoint_requires_auth_when_token_is_set() {
+        // /openapi.json is deliberately not in AUTH_EXEMPT_ROUTES — it exposes
+        // the full API surface and should be gated behind the token.
+        let app = build_router_with_token(fixture_state(), Some(TEST_API_TOKEN.to_owned()));
+
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(OPENAPI_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            unauthenticated
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .is_some(),
+            "401 response must include WWW-Authenticate header"
+        );
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .uri(OPENAPI_PATH)
+                    .header("authorization", format!("Bearer {TEST_API_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn oversized_request_body_is_rejected() {
+        let app = build_router(fixture_state());
+        let oversized_payload = format!(
+            "{{\"padding\":\"{}\"}}",
+            "x".repeat(crate::constants::MAX_REQUEST_BODY_BYTES + 1)
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/bots/aapl/simulate-bar")
+                    .header("content-type", "application/json")
+                    .body(Body::from(oversized_payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn excessive_limit_query_parameter_is_clamped_and_succeeds() {
+        let app = build_router(fixture_state());
+        for uri in [
+            "/v1/events?limit=999999999",
+            "/v1/signals?limit=999999999",
+            "/v1/orders?limit=999999999",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "uri {uri} should succeed with a clamped limit"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn health_endpoint_returns_ok() {
         let app = build_router(fixture_state());
         let response = app
@@ -214,7 +469,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         assert_eq!(body, "{\"status\":\"ok\"}");
     }
 
@@ -234,7 +491,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(ready_response.status(), StatusCode::OK);
-        let ready_body = to_bytes(ready_response.into_body(), usize::MAX)
+        let ready_body = to_bytes(ready_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).unwrap();
@@ -273,7 +530,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(blocked_response.status(), StatusCode::OK);
-        let blocked_body = to_bytes(blocked_response.into_body(), usize::MAX)
+        let blocked_body = to_bytes(blocked_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
@@ -294,7 +551,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let openapi: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(openapi["openapi"], "3.0.3");
@@ -331,7 +590,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let metrics = String::from_utf8(body.to_vec()).unwrap();
 
         assert!(metrics.contains("openticker_risk_rejects_total"));
@@ -358,7 +619,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["total_instances"], 1);
         assert_eq!(json["running_instances"], 0);
@@ -381,7 +644,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["accounts"].as_array().map(Vec::len), Some(1));
         assert_eq!(json["bots"].as_array().map(Vec::len), Some(1));
@@ -404,7 +669,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["accounts"].as_array().map(Vec::len), Some(1));
         assert_eq!(json["bots"].as_array().map(Vec::len), Some(1));
@@ -427,7 +694,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(accounts.status(), StatusCode::OK);
-        let accounts_body = to_bytes(accounts.into_body(), usize::MAX).await.unwrap();
+        let accounts_body = to_bytes(accounts.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let accounts_json: serde_json::Value = serde_json::from_slice(&accounts_body).unwrap();
         assert_eq!(accounts_json.as_array().map(Vec::len), Some(1));
 
@@ -442,7 +711,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bots.status(), StatusCode::OK);
-        let bots_body = to_bytes(bots.into_body(), usize::MAX).await.unwrap();
+        let bots_body = to_bytes(bots.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let bots_json: serde_json::Value = serde_json::from_slice(&bots_body).unwrap();
         assert_eq!(bots_json.as_array().map(Vec::len), Some(1));
 
@@ -456,7 +727,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(lanes.status(), StatusCode::OK);
-        let lanes_body = to_bytes(lanes.into_body(), usize::MAX).await.unwrap();
+        let lanes_body = to_bytes(lanes.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let lanes_json: serde_json::Value = serde_json::from_slice(&lanes_body).unwrap();
         assert_eq!(lanes_json.as_array().map(Vec::len), Some(0));
     }
@@ -475,7 +748,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let connectors = json.as_array().unwrap();
         assert!(!connectors.is_empty());
@@ -495,7 +770,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let statuses = json.as_array().unwrap();
         assert!(!statuses.is_empty());
@@ -555,7 +832,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let events = json.as_array().expect("events should be an array");
         assert!(!events.is_empty());
@@ -589,7 +868,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let events = json.as_array().expect("events should be an array");
         assert!(!events.is_empty());
@@ -605,7 +886,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(scoped_response.status(), StatusCode::OK);
-        let scoped_body = to_bytes(scoped_response.into_body(), usize::MAX)
+        let scoped_body = to_bytes(scoped_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let scoped_json: serde_json::Value = serde_json::from_slice(&scoped_body).unwrap();
@@ -674,7 +955,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(signals_response.status(), StatusCode::OK);
-        let body = to_bytes(signals_response.into_body(), usize::MAX)
+        let body = to_bytes(signals_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -723,7 +1004,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let payload = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let outcomes: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert!(!outcomes.as_array().unwrap().is_empty());
     }
@@ -778,7 +1061,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(instance_response.status(), StatusCode::OK);
-        let instance_body = to_bytes(instance_response.into_body(), usize::MAX)
+        let instance_body = to_bytes(instance_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let instance_json: serde_json::Value = serde_json::from_slice(&instance_body).unwrap();
@@ -807,7 +1090,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(orders_response.status(), StatusCode::OK);
-        let orders_body = to_bytes(orders_response.into_body(), usize::MAX)
+        let orders_body = to_bytes(orders_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let orders_json: serde_json::Value = serde_json::from_slice(&orders_body).unwrap();
@@ -824,7 +1107,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events_response.status(), StatusCode::OK);
-        let events_body = to_bytes(events_response.into_body(), usize::MAX)
+        let events_body = to_bytes(events_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let events_json: serde_json::Value = serde_json::from_slice(&events_body).unwrap();
@@ -874,7 +1157,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_response.status(), StatusCode::OK);
-        let first_body = to_bytes(first_response.into_body(), usize::MAX)
+        let first_body = to_bytes(first_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let first_outcomes: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
@@ -894,7 +1177,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(second_response.status(), StatusCode::OK);
-        let second_body = to_bytes(second_response.into_body(), usize::MAX)
+        let second_body = to_bytes(second_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let second_outcomes: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
@@ -942,7 +1225,7 @@ mod tests {
             .unwrap();
         assert_eq!(instances_response.status(), StatusCode::OK);
 
-        let body = to_bytes(instances_response.into_body(), usize::MAX)
+        let body = to_bytes(instances_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1141,7 +1424,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         serde_json::from_slice(&body).unwrap()
     }
 
@@ -1173,7 +1458,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let records = json.as_array().expect("reconciliations should be an array");
         assert_eq!(records.len(), 1);
@@ -1214,7 +1501,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report_response.status(), StatusCode::OK);
-        let body = to_bytes(report_response.into_body(), usize::MAX)
+        let body = to_bytes(report_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1265,7 +1552,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["id"], "aapl");
         assert_eq!(json["state"], "running");
@@ -1318,7 +1607,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["bots"].is_array());
     }
@@ -1345,7 +1636,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let body_text = String::from_utf8(body.to_vec()).unwrap();
         let json: serde_json::Value = serde_json::from_str(&body_text).unwrap();
         assert!(json["accounts"][0]["secret_status"].is_object());
@@ -1414,7 +1707,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(instance_response.status(), StatusCode::OK);
-        let body = to_bytes(instance_response.into_body(), usize::MAX)
+        let body = to_bytes(instance_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -1449,7 +1742,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("execution_connector"));
@@ -1480,7 +1775,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("storage"));
@@ -1513,7 +1810,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("credential references"));
@@ -1551,7 +1850,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("connector settings"));
@@ -1583,7 +1884,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("timeframe"));
@@ -1616,7 +1919,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("symbols changed"));
@@ -1649,7 +1954,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let error = json["error"].as_str().unwrap_or_default();
         assert!(error.contains("running instance `aapl` was removed"));
@@ -1912,7 +2219,9 @@ mod tests {
             .await
             .unwrap();
         let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json = serde_json::from_slice(&body).unwrap();
         (status, json)
     }
@@ -1946,7 +2255,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(enable_response.status(), StatusCode::OK);
-        let enable_body = to_bytes(enable_response.into_body(), usize::MAX)
+        let enable_body = to_bytes(enable_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let enable_json: serde_json::Value = serde_json::from_slice(&enable_body).unwrap();
@@ -1965,7 +2274,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(blocked_resume.status(), StatusCode::CONFLICT);
-        let blocked_body = to_bytes(blocked_resume.into_body(), usize::MAX)
+        let blocked_body = to_bytes(blocked_resume.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let blocked_json: serde_json::Value = serde_json::from_slice(&blocked_body).unwrap();
@@ -1988,7 +2297,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(clear_response.status(), StatusCode::OK);
-        let clear_body = to_bytes(clear_response.into_body(), usize::MAX)
+        let clear_body = to_bytes(clear_response.into_body(), MAX_TEST_RESPONSE_BYTES)
             .await
             .unwrap();
         let clear_json: serde_json::Value = serde_json::from_slice(&clear_body).unwrap();
@@ -2022,7 +2331,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let streams = json.as_array().expect("streams payload should be an array");
         assert_eq!(streams.len(), 1);
@@ -2068,7 +2379,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let bars = json.as_array().expect("bars payload should be an array");
         assert_eq!(bars.len(), 2);
@@ -2090,7 +2403,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["source"], "connector_history");
         let bars = json["bars"]
@@ -2114,7 +2429,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(
             json["error"]
@@ -2139,7 +2456,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_TEST_RESPONSE_BYTES)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(
             json["error"]

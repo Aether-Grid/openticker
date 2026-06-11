@@ -318,6 +318,13 @@ impl DataPlane {
         self.metrics.record_completion(is_error);
     }
 
+    /// Records that a fetch-error or error-callback failure could not be
+    /// recorded against its stream and was therefore dropped by the polling
+    /// loop (for example because the stream was unregistered concurrently).
+    pub fn record_dropped_error_record(&self) {
+        self.metrics.record_dropped_error_record();
+    }
+
     /// Marks a stream as manually polled and increments fetch counters.
     ///
     /// # Errors
@@ -382,9 +389,16 @@ impl DataPlane {
             for stream_key in due_streams {
                 let attempt_result = on_attempt(&stream_key, now_ms).await;
                 if let Err(error) = attempt_result {
-                    let _ = self.record_fetch_error(&stream_key, &error);
+                    // The stream may have been unregistered between selection
+                    // and error handling; count any dropped failure so it is
+                    // observable instead of vanishing, but keep the loop going.
+                    if self.record_fetch_error(&stream_key, &error).is_err() {
+                        self.record_dropped_error_record();
+                    }
                     self.record_completion(true);
-                    let _ = on_error(&stream_key, &error).await;
+                    if on_error(&stream_key, &error).await.is_err() {
+                        self.record_dropped_error_record();
+                    }
                     continue;
                 }
 
@@ -398,8 +412,15 @@ impl DataPlane {
                         Err(error) => Err(error.to_string()),
                     },
                     Err(error) => {
-                        let _ = self.record_fetch_error(&stream_key, &error);
-                        let _ = on_error(&stream_key, &error).await;
+                        // As above: surface dropped error records (e.g. for a
+                        // concurrently unregistered stream) via a counter
+                        // rather than discarding them silently.
+                        if self.record_fetch_error(&stream_key, &error).is_err() {
+                            self.record_dropped_error_record();
+                        }
+                        if on_error(&stream_key, &error).await.is_err() {
+                            self.record_dropped_error_record();
+                        }
                         Err(error)
                     }
                 };
@@ -447,7 +468,7 @@ impl StreamEntry {
         let latest_bar = self.buffer.latest();
         let confirmed_bar_close_ms = latest_bar.as_ref().map(|bar| {
             let timeframe_ms =
-                i64::try_from(self.spec.key.timeframe.duration().as_millis()).unwrap_or(i64::MAX);
+                saturating_millis_to_i64(self.spec.key.timeframe.duration().as_millis());
             bar.timestamp
                 .timestamp_millis()
                 .saturating_add(timeframe_ms)
@@ -456,7 +477,7 @@ impl StreamEntry {
             .map(|close_ms| u64::try_from(now_ms.saturating_sub(close_ms)).unwrap_or(0));
         let confirmed_bar_stale_deadline_ms = confirmed_bar_close_ms.and_then(|close_ms| {
             self.spec.close_poll_grace_ms.map(|grace_ms| {
-                let grace_ms = i64::try_from(grace_ms).unwrap_or(i64::MAX);
+                let grace_ms = saturating_millis_to_i64(grace_ms);
                 close_ms.saturating_add(grace_ms)
             })
         });
@@ -499,7 +520,7 @@ impl StreamEntry {
     }
 
     fn is_due(&self, now_ms: i64) -> bool {
-        let polling_interval_ms = i64::try_from(self.spec.polling_interval_ms).unwrap_or(i64::MAX);
+        let polling_interval_ms = saturating_millis_to_i64(self.spec.polling_interval_ms);
         let normal_due = self.last_attempt_ms.is_none_or(|last_attempt_ms| {
             now_ms.saturating_sub(last_attempt_ms) >= polling_interval_ms
         });
@@ -517,9 +538,8 @@ impl StreamEntry {
             return false;
         };
 
-        let timeframe_ms =
-            i64::try_from(self.spec.key.timeframe.duration().as_millis()).unwrap_or(i64::MAX);
-        let grace_ms = i64::try_from(grace_ms).unwrap_or(i64::MAX);
+        let timeframe_ms = saturating_millis_to_i64(self.spec.key.timeframe.duration().as_millis());
+        let grace_ms = saturating_millis_to_i64(grace_ms);
         let expected_close_ms = latest_bar
             .timestamp
             .timestamp_millis()
@@ -529,15 +549,30 @@ impl StreamEntry {
             return false;
         }
 
-        let retry_ms = i64::try_from(retry_ms).unwrap_or(i64::MAX);
+        let retry_ms = saturating_millis_to_i64(retry_ms);
         self.last_attempt_ms
             .is_none_or(|last_attempt_ms| now_ms.saturating_sub(last_attempt_ms) >= retry_ms)
     }
+}
+
+/// Converts an unsigned millisecond duration into the signed `i64` millisecond
+/// representation used for wall-clock timestamps, saturating at [`i64::MAX`] on
+/// overflow.
+///
+/// The saturation is documentation, not a real failure mode: `i64::MAX`
+/// milliseconds is roughly 292 million years, so polling intervals, grace
+/// windows, retry windows, and timeframe durations can never approach it. The
+/// cap exists only to keep the conversion total (infallible) without an
+/// `unwrap`/`expect` that could panic. If an input ever did overflow, the
+/// resulting timestamp would simply be pushed far into the future, which the
+/// `saturating_add` callers treat as "not yet due".
+fn saturating_millis_to_i64<T: TryInto<i64>>(millis: T) -> i64 {
+    millis.try_into().unwrap_or(i64::MAX)
 }
 
 fn unix_now_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+    saturating_millis_to_i64(duration.as_millis())
 }

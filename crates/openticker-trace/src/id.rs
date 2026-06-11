@@ -61,6 +61,16 @@ impl TraceIdentity {
     }
 }
 
+/// Generates a short-term diagnostic trace ID of the form
+/// `trc_{nanos:x}_{sequence:x}`.
+///
+/// IDs are unique within a single process run: the atomic `TRACE_SEQUENCE`
+/// guarantees no two IDs collide while the process lives. They are **not**
+/// globally unique across restarts — the sequence resets to 1 on each start,
+/// and although the nanosecond timestamp prefix makes a same-nanosecond
+/// restart collision improbable, it is not impossible under frequent restarts.
+/// This is acceptable for short-lived diagnostic correlation; add a process ID
+/// (or a UUID) if long-term cross-restart uniqueness is ever required.
 #[must_use]
 pub fn generate_trace_id() -> String {
     let duration = SystemTime::now()

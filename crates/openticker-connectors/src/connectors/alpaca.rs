@@ -6,7 +6,8 @@ use crate::{
     ConnectorResiliencePolicy, ConnectorResilienceState, ConnectorRuntimeControl, ConnectorStatus,
     ConnectorSymbolConstraints, ConnectorSymbolConstraintsLookup, StubConnector,
     default_blocking_http_client, descriptor_for, deterministic_remote_client_order_id,
-    format_decimal_quantity, resolve_secret_env_value, run_in_blocking_thread,
+    format_decimal_quantity, rate_limit_error, resolve_secret_env_value, retry_after_header,
+    run_in_blocking_thread, sanitize_symbol_for_error,
 };
 use openticker_core::{ExecutionMode, OhlcvBar, Timeframe};
 use openticker_data::NormalizedBarUpdate;
@@ -27,6 +28,13 @@ const ALPACA_RECENT_BARS_LOOKBACK_MAX_DAYS: i64 = 730;
 const ALPACA_RECENT_BARS_LOOKBACK_SLACK: i64 = 6;
 const ALPACA_ORDER_STATUS_POLL_ATTEMPTS: u8 = 20;
 const ALPACA_ORDER_STATUS_POLL_INTERVAL_MS: u64 = 250;
+/// Upper bound on the order-status polling interval. The interval starts at
+/// [`ALPACA_ORDER_STATUS_POLL_INTERVAL_MS`] and doubles each attempt (capped
+/// here) so a slow-to-fill order backs off instead of polling at a fixed fast
+/// rate. A `429`/`418` response short-circuits the loop entirely because the
+/// status fetch decodes through `decode_order_submission_json`, which surfaces
+/// [`ConnectorError::RateLimited`].
+const ALPACA_ORDER_STATUS_POLL_MAX_INTERVAL_MS: u64 = 4_000;
 
 #[derive(Debug, Clone)]
 pub struct AlpacaConnector {
@@ -203,7 +211,8 @@ impl AlpacaConnector {
                 .ok_or_else(|| ConnectorError::RemoteSnapshot {
                     kind: ConnectorKind::Alpaca,
                     detail: format!(
-                        "latest bar response did not include confirmed bar data for `{symbol}`"
+                        "latest bar response did not include confirmed bar data for `{}`",
+                        sanitize_symbol_for_error(&symbol)
                     ),
                 })
         })
@@ -432,7 +441,10 @@ impl AlpacaConnector {
                 if !asset.tradable {
                     return Err(ConnectorError::RemoteSnapshot {
                         kind: ConnectorKind::Alpaca,
-                        detail: format!("asset `{symbol}` is not tradable"),
+                        detail: format!(
+                            "asset `{}` is not tradable",
+                            sanitize_symbol_for_error(&symbol)
+                        ),
                     });
                 }
 
@@ -512,7 +524,14 @@ impl AlpacaConnector {
                     break;
                 }
 
-                std::thread::sleep(Duration::from_millis(ALPACA_ORDER_STATUS_POLL_INTERVAL_MS));
+                // Exponential backoff: double the base interval each attempt up
+                // to the cap so a slow-to-fill order eases off the API instead
+                // of polling at a fixed 250ms. A rate-limit response below
+                // breaks the loop via `?` (RateLimited).
+                let backoff_ms = ALPACA_ORDER_STATUS_POLL_INTERVAL_MS
+                    .saturating_mul(1_u64 << u32::from(attempt).min(16))
+                    .min(ALPACA_ORDER_STATUS_POLL_MAX_INTERVAL_MS);
+                std::thread::sleep(Duration::from_millis(backoff_ms));
                 let status_response = client
                     .get(format!("{base_url}/v2/orders/{}", order_payload.id))
                     .header("APCA-API-KEY-ID", api_key.as_str())
@@ -794,7 +813,13 @@ fn alpaca_recent_bars_lookback_start(
     limit: usize,
 ) -> String {
     let requested_bars = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
-    let seconds_per_bar = i64::try_from(timeframe.duration().as_secs()).unwrap_or(i64::MAX);
+    // Guard against a zero or sub-second timeframe duration: without a floor a
+    // tiny duration collapses `lookback_seconds` toward zero and the lookback
+    // window would degenerate. A minimum of one second per bar keeps the
+    // computed window monotonic in `limit` before the day clamp applies.
+    let seconds_per_bar = i64::try_from(timeframe.duration().as_secs())
+        .unwrap_or(i64::MAX)
+        .max(1);
     let lookback_seconds = seconds_per_bar
         .saturating_mul(requested_bars)
         .saturating_mul(ALPACA_RECENT_BARS_LOOKBACK_SLACK);
@@ -889,12 +914,22 @@ fn decode_json_response<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, ConnectorError> {
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_header(&response);
         let body = response
             .text()
             .unwrap_or_else(|_| "<response body unavailable>".to_owned());
+        let detail = format!("{operation} request returned {status}: {body}");
+        if let Some(error) = rate_limit_error(
+            ConnectorKind::Alpaca,
+            status,
+            retry_after.as_deref(),
+            detail.clone(),
+        ) {
+            return Err(error);
+        }
         return Err(ConnectorError::RemoteSnapshot {
             kind: ConnectorKind::Alpaca,
-            detail: format!("{operation} request returned {status}: {body}"),
+            detail,
         });
     }
 
@@ -912,12 +947,22 @@ fn decode_order_submission_json<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, ConnectorError> {
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_header(&response);
         let body = response
             .text()
             .unwrap_or_else(|_| "<response body unavailable>".to_owned());
+        let detail = format!("{operation} request returned {status}: {body}");
+        if let Some(error) = rate_limit_error(
+            ConnectorKind::Alpaca,
+            status,
+            retry_after.as_deref(),
+            detail.clone(),
+        ) {
+            return Err(error);
+        }
         return Err(ConnectorError::OrderSubmission {
             kind: ConnectorKind::Alpaca,
-            detail: format!("{operation} request returned {status}: {body}"),
+            detail,
         });
     }
 

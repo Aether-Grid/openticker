@@ -9,15 +9,21 @@ use openticker_connectors::{
 };
 use openticker_dataplane::{DataPlane, StreamKey, StreamPreviewConnectionState};
 use openticker_gateway::Gateway;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 pub const RUNTIME_BACKGROUND_POLL_INTERVAL_MS: u64 = 250;
+
+/// Upper bound on concurrently active preview stream workers. Accounts beyond
+/// this cap are skipped (with a warning) until capacity frees up, keeping the
+/// worker map bounded even if configuration produces many preview-enabled
+/// accounts.
+const MAX_ACTIVE_PREVIEW_WORKERS: usize = 32;
 
 #[derive(Debug)]
 pub struct RuntimePollingSupervisor {
@@ -92,21 +98,40 @@ async fn run_background_polling_loop(
             (plans, gateway)
         };
 
+        let throttled_accounts = gateway
+            .statuses()
+            .map(|statuses| {
+                statuses
+                    .into_iter()
+                    .filter(|status| {
+                        status
+                            .resilience_state
+                            .throttled_until_ms
+                            .is_some_and(|until_ms| now_ms < until_ms)
+                    })
+                    .map(|status| status.account_id)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+
         let mut join_set = JoinSet::<(StreamKey, Result<LanePollingAdvance, ServiceError>)>::new();
         for (stream_key, plan_result) in plans {
+            if throttled_accounts.contains(&stream_key.account_id) {
+                debug!(
+                    account_id = %stream_key.account_id,
+                    symbol = %stream_key.symbol,
+                    timeframe = %stream_key.timeframe,
+                    "skipping poll while provider rate limit is active"
+                );
+                continue;
+            }
             let plan = match plan_result {
                 Ok(plan) => plan,
                 Err(error) => {
-                    let error_message = error.to_string();
-                    let _ = data_plane.record_fetch_error(&stream_key, &error_message);
-                    data_plane.record_completion(true);
-                    error!(
-                        account_id = %stream_key.account_id,
-                        symbol = %stream_key.symbol,
-                        timeframe = %stream_key.timeframe,
-                        error = %error_message,
-                        "data-plane plan phase failed"
-                    );
+                    record_plan_phase_failure(&data_plane, &stream_key, &error);
+                    // No fetch task is spawned for this stream, so the
+                    // recorded plan-phase error cannot be overwritten by a
+                    // later `record_fetched_bar` result within this cycle.
                     continue;
                 }
             };
@@ -145,6 +170,30 @@ async fn run_background_polling_loop(
     info!("runtime-owned background polling loop stopped");
 }
 
+/// Records a plan-phase failure for a stream in the data plane. Callers must
+/// skip spawning a fetch task for the stream afterwards so the recorded error
+/// is not overwritten by a later fetch result within the same cycle.
+fn record_plan_phase_failure(data_plane: &DataPlane, stream_key: &StreamKey, error: &ServiceError) {
+    let error_message = error.to_string();
+    if let Err(record_error) = data_plane.record_fetch_error(stream_key, &error_message) {
+        warn!(
+            account_id = %stream_key.account_id,
+            symbol = %stream_key.symbol,
+            timeframe = %stream_key.timeframe,
+            error = %record_error,
+            "failed to record plan-phase error"
+        );
+    }
+    data_plane.record_completion(true);
+    error!(
+        account_id = %stream_key.account_id,
+        symbol = %stream_key.symbol,
+        timeframe = %stream_key.timeframe,
+        error = %error_message,
+        "data-plane plan phase failed"
+    );
+}
+
 async fn execute_stream_poll_cycle(
     runtime: Arc<RwLock<Runtime>>,
     data_plane: Arc<DataPlane>,
@@ -160,19 +209,26 @@ async fn execute_stream_poll_cycle(
             symbol,
             timeframe,
         } => {
+            let error_stream_id = stream_id.clone();
+            let error_account_id = account_id.clone();
             let fetch_started_at = Instant::now();
-            let execution = Runtime::execute_bare_stream_fetch(
-                &gateway,
-                &stream_id,
-                &account_id,
-                &account_kind,
-                &symbol,
-                timeframe,
-            );
+            // Connector fetches are blocking network I/O; run them off the
+            // async workers so per-ticker polling cannot starve HTTP handlers.
+            let execution = tokio::task::spawn_blocking(move || {
+                Runtime::execute_bare_stream_fetch(
+                    &gateway,
+                    &stream_id,
+                    &account_id,
+                    &account_kind,
+                    &symbol,
+                    timeframe,
+                )
+            })
+            .await;
             data_plane.record_connector_fetch_latency(fetch_started_at.elapsed());
 
             match execution {
-                Ok(execution) => {
+                Ok(Ok(execution)) => {
                     let write_lock_wait_started_at = Instant::now();
                     let mut runtime = runtime.write().await;
                     data_plane.record_runtime_write_lock_wait(write_lock_wait_started_at.elapsed());
@@ -182,7 +238,7 @@ async fn execute_stream_poll_cycle(
                         &execution.provider_events,
                     )
                 }
-                Err(failure) => {
+                Ok(Err(failure)) => {
                     if let Err(error) =
                         flush_provider_events(&runtime, &failure.provider_events).await
                     {
@@ -191,6 +247,11 @@ async fn execute_stream_poll_cycle(
                         Err(failure.error)
                     }
                 }
+                Err(join_error) => Err(ServiceError::DataConnectorUnavailable {
+                    instance_id: error_stream_id,
+                    account_id: error_account_id,
+                    reason: describe_fetch_join_error(join_error),
+                }),
             }
         }
         StreamPollPlan::LaneFanOut { instance_ids } => {
@@ -199,6 +260,26 @@ async fn execute_stream_poll_cycle(
     };
 
     (stream_key, result)
+}
+
+/// Renders a [`tokio::task::JoinError`] from a blocking fetch task into a
+/// human-readable reason, distinguishing cancellation from panics and
+/// extracting string panic payloads where possible.
+fn describe_fetch_join_error(join_error: tokio::task::JoinError) -> String {
+    if join_error.is_cancelled() {
+        return "blocking fetch task was cancelled".to_owned();
+    }
+    match join_error.try_into_panic() {
+        Ok(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            format!("blocking fetch task panicked: {message}")
+        }
+        Err(join_error) => format!("blocking fetch task failed: {join_error}"),
+    }
 }
 
 async fn execute_lane_fanout_poll_cycle(
@@ -229,8 +310,25 @@ async fn execute_lane_fanout_poll_cycle(
                 break;
             }
 
+            let (LanePollPlan::LatestBar { account_id, .. }
+            | LanePollPlan::LatestConfirmedTarget { account_id, .. }
+            | LanePollPlan::ConfirmedRange { account_id, .. }) = &next_plan;
+            let error_account_id = account_id.clone();
+
             let fetch_started_at = Instant::now();
-            let execution = Runtime::execute_lane_poll_plan(gateway, &next_plan);
+            // Connector fetches are blocking network I/O; run them off the
+            // async workers so per-ticker polling cannot starve HTTP handlers.
+            let fetch_gateway = gateway.clone();
+            let (plan, execution) = tokio::task::spawn_blocking(move || {
+                let execution = Runtime::execute_lane_poll_plan(&fetch_gateway, &next_plan);
+                (next_plan, execution)
+            })
+            .await
+            .map_err(|join_error| ServiceError::DataConnectorUnavailable {
+                instance_id: instance_id.clone(),
+                account_id: error_account_id,
+                reason: describe_fetch_join_error(join_error),
+            })?;
             data_plane.record_connector_fetch_latency(fetch_started_at.elapsed());
 
             let execution = match execution {
@@ -244,7 +342,7 @@ async fn execute_lane_fanout_poll_cycle(
             let write_lock_wait_started_at = Instant::now();
             let mut runtime = runtime.write().await;
             data_plane.record_runtime_write_lock_wait(write_lock_wait_started_at.elapsed());
-            let outcome = runtime.apply_lane_poll_plan(next_plan, execution)?;
+            let outcome = runtime.apply_lane_poll_plan(plan, execution)?;
             drop(runtime);
 
             if is_recovery_page {
@@ -296,7 +394,15 @@ fn record_stream_poll_result(
             }
 
             if let Some(error_message) = completion_error {
-                let _ = data_plane.record_fetch_error(stream_key, &error_message);
+                if let Err(e) = data_plane.record_fetch_error(stream_key, &error_message) {
+                    tracing::warn!(
+                        account_id = %stream_key.account_id,
+                        symbol = %stream_key.symbol,
+                        timeframe = %stream_key.timeframe,
+                        error = %e,
+                        "failed to record fetch error for stream bookkeeping"
+                    );
+                }
                 data_plane.record_completion(true);
                 error!(
                     account_id = %stream_key.account_id,
@@ -311,7 +417,15 @@ fn record_stream_poll_result(
         }
         Err(error) => {
             let error_message = error.to_string();
-            let _ = data_plane.record_fetch_error(stream_key, &error_message);
+            if let Err(e) = data_plane.record_fetch_error(stream_key, &error_message) {
+                tracing::warn!(
+                    account_id = %stream_key.account_id,
+                    symbol = %stream_key.symbol,
+                    timeframe = %stream_key.timeframe,
+                    error = %e,
+                    "failed to record fetch error for stream bookkeeping"
+                );
+            }
             data_plane.record_completion(true);
             error!(
                 account_id = %stream_key.account_id,
@@ -334,7 +448,17 @@ async fn run_background_preview_loop(
 
     let mut shutdown = shutdown;
     let mut workers = HashMap::<String, AccountPreviewWorker>::new();
+    // Accounts already warned about the preview worker cap, so the warning is
+    // emitted once per capacity episode instead of every loop iteration.
+    let mut capacity_warned_accounts = HashSet::<String>::new();
 
+    // Shutdown latency: the signal is observed at the top of each iteration,
+    // once between the session-management and event-draining stages, and via
+    // `shutdown.changed()` while sleeping between iterations. A shutdown
+    // raised mid-stage is therefore only honored once the current stage
+    // completes, giving a worst case of roughly one full iteration of work
+    // plus the `RUNTIME_BACKGROUND_POLL_INTERVAL_MS` sleep. This is an
+    // accepted trade-off; preview streams are non-critical for trading.
     loop {
         if *shutdown.borrow() {
             break;
@@ -366,11 +490,23 @@ async fn run_background_preview_loop(
             }
         }
 
-        for (account_id, subscriptions) in &desired_by_account {
-            if workers.contains_key(account_id) {
-                continue;
+        let (admitted_accounts, capacity_skipped_accounts) =
+            partition_preview_worker_candidates(&workers, &desired_by_account);
+        capacity_warned_accounts
+            .retain(|account_id| capacity_skipped_accounts.contains(&account_id));
+        for account_id in capacity_skipped_accounts {
+            if capacity_warned_accounts.insert(account_id.clone()) {
+                warn!(
+                    account_id = %account_id,
+                    active_workers = workers.len(),
+                    max_workers = MAX_ACTIVE_PREVIEW_WORKERS,
+                    "preview worker limit reached; skipping preview stream for account"
+                );
             }
+        }
 
+        for account_id in admitted_accounts {
+            let subscriptions = &desired_by_account[account_id];
             match gateway.start_preview_stream_session(account_id) {
                 Ok(Some(session)) => {
                     if let Err(error) = session.replace_subscriptions(subscriptions.clone()) {
@@ -411,6 +547,12 @@ async fn run_background_preview_loop(
                     );
                 }
             }
+        }
+
+        // Re-check between processing stages so a shutdown raised while
+        // sessions were being (re)started is honored before draining events.
+        if *shutdown.borrow() {
+            break;
         }
 
         let mut restart_accounts = Vec::new();
@@ -490,6 +632,31 @@ async fn run_background_preview_loop(
     info!("runtime-owned preview stream loop stopped");
 }
 
+/// Partitions the desired preview accounts that do not yet have a worker into
+/// those admitted under [`MAX_ACTIVE_PREVIEW_WORKERS`] and those skipped
+/// because the cap has been reached. Accounts that already have a worker are
+/// excluded from both lists.
+fn partition_preview_worker_candidates<'a, W>(
+    workers: &HashMap<String, W>,
+    desired_by_account: &'a BTreeMap<String, Vec<ConnectorMarketStreamSubscription>>,
+) -> (Vec<&'a String>, Vec<&'a String>) {
+    let mut admitted = Vec::new();
+    let mut skipped = Vec::new();
+    let mut projected_active = workers.len();
+    for account_id in desired_by_account.keys() {
+        if workers.contains_key(account_id) {
+            continue;
+        }
+        if projected_active < MAX_ACTIVE_PREVIEW_WORKERS {
+            projected_active += 1;
+            admitted.push(account_id);
+        } else {
+            skipped.push(account_id);
+        }
+    }
+    (admitted, skipped)
+}
+
 async fn handle_preview_event(
     runtime: &Arc<RwLock<Runtime>>,
     data_plane: &Arc<DataPlane>,
@@ -517,7 +684,15 @@ async fn handle_preview_event(
                 timeframe: subscription.timeframe,
             };
             let now_ms = crate::unix_now_ms();
-            let _ = data_plane.record_preview_update(&key, now_ms, update.bar.clone());
+            if let Err(error) = data_plane.record_preview_update(&key, now_ms, update.bar.clone()) {
+                warn!(
+                    account_id = %key.account_id,
+                    symbol = %key.symbol,
+                    timeframe = %key.timeframe,
+                    error = %error,
+                    "failed to record preview update"
+                );
+            }
             if matches!(update.phase, crate::SignalPhase::Confirmed) {
                 return;
             }
@@ -544,15 +719,22 @@ fn record_preview_state_for_subscriptions(
     detail: Option<&str>,
 ) {
     for subscription in subscriptions {
-        let _ = data_plane.record_preview_connection_state(
-            &StreamKey {
-                account_id: account_id.to_owned(),
-                symbol: subscription.symbol.clone(),
-                timeframe: subscription.timeframe,
-            },
-            state,
-            detail.map(str::to_owned),
-        );
+        let key = StreamKey {
+            account_id: account_id.to_owned(),
+            symbol: subscription.symbol.clone(),
+            timeframe: subscription.timeframe,
+        };
+        if let Err(error) =
+            data_plane.record_preview_connection_state(&key, state, detail.map(str::to_owned))
+        {
+            warn!(
+                account_id = %key.account_id,
+                symbol = %key.symbol,
+                timeframe = %key.timeframe,
+                error = %error,
+                "failed to record preview connection state"
+            );
+        }
     }
 }
 
@@ -624,7 +806,8 @@ mod tests {
             .snapshot_streams(crate::unix_now_ms(), 1)
             .remove(0);
         assert!(stream.latest_bar.is_none());
-        assert_eq!(stream.latest_preview_bar.unwrap().close, 101.0);
+        let preview_close = stream.latest_preview_bar.unwrap().close;
+        assert!((preview_close - 101.0).abs() < 1e-9);
         assert!(stream.last_preview_update_ms.is_some());
         assert_eq!(stream.last_confirmed_update_source, None);
 
@@ -635,5 +818,70 @@ mod tests {
             .expect("lane should exist")
             .last_dispatched_bar_timestamp;
         assert_eq!(lane, previous_dispatched);
+    }
+
+    #[test]
+    fn preview_worker_admissions_respect_active_worker_cap() {
+        let subscriptions = vec![ConnectorMarketStreamSubscription {
+            symbol: "AAPL".to_owned(),
+            timeframe: Timeframe::M1,
+        }];
+
+        // The value type stands in for `AccountPreviewWorker`; the admission
+        // logic only inspects the keys and the map size.
+        let mut workers = HashMap::<String, u8>::new();
+        for index in 0..(MAX_ACTIVE_PREVIEW_WORKERS - 1) {
+            workers.insert(format!("existing-{index:02}"), 0);
+        }
+
+        let mut desired = BTreeMap::<String, Vec<ConnectorMarketStreamSubscription>>::new();
+        desired.insert("existing-00".to_owned(), subscriptions.clone());
+        desired.insert("new-a".to_owned(), subscriptions.clone());
+        desired.insert("new-b".to_owned(), subscriptions.clone());
+        desired.insert("new-c".to_owned(), subscriptions);
+
+        let (admitted, skipped) = partition_preview_worker_candidates(&workers, &desired);
+        let admitted = admitted.into_iter().map(String::as_str).collect::<Vec<_>>();
+        let skipped = skipped.into_iter().map(String::as_str).collect::<Vec<_>>();
+
+        // One slot is free: the first missing account is admitted, the rest
+        // are skipped, and accounts that already have a worker appear in
+        // neither list.
+        assert_eq!(admitted, ["new-a"]);
+        assert_eq!(skipped, ["new-b", "new-c"]);
+    }
+
+    #[test]
+    fn preview_worker_admissions_allow_all_when_under_cap() {
+        let workers = HashMap::<String, u8>::new();
+        let mut desired = BTreeMap::<String, Vec<ConnectorMarketStreamSubscription>>::new();
+        desired.insert("acct-a".to_owned(), Vec::new());
+        desired.insert("acct-b".to_owned(), Vec::new());
+
+        let (admitted, skipped) = partition_preview_worker_candidates(&workers, &desired);
+        assert_eq!(admitted.len(), 2);
+        assert!(skipped.is_empty());
+    }
+
+    #[tokio::test]
+    async fn describe_fetch_join_error_extracts_panic_payload() {
+        let join_error = tokio::spawn(async { panic!("connector exploded") })
+            .await
+            .expect_err("task should panic");
+        assert_eq!(
+            describe_fetch_join_error(join_error),
+            "blocking fetch task panicked: connector exploded"
+        );
+    }
+
+    #[tokio::test]
+    async fn describe_fetch_join_error_reports_cancellation() {
+        let handle = tokio::spawn(std::future::pending::<()>());
+        handle.abort();
+        let join_error = handle.await.expect_err("task should be cancelled");
+        assert_eq!(
+            describe_fetch_join_error(join_error),
+            "blocking fetch task was cancelled"
+        );
     }
 }

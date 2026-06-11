@@ -309,6 +309,198 @@ fn sqlite_journal_prunes_removed_instances() {
     assert_pruned_journal_contents(&reopened).unwrap();
 }
 
+#[test]
+fn monotonic_timestamp_floor_handles_clock_regression() {
+    let floor = AtomicI64::new(0);
+
+    assert_eq!(monotonic_timestamp_ms(&floor, Some(1_000)), 1_000);
+    // An advancing clock moves the floor forward.
+    assert_eq!(monotonic_timestamp_ms(&floor, Some(2_000)), 2_000);
+    // A clock regression returns the last known good timestamp.
+    assert_eq!(monotonic_timestamp_ms(&floor, Some(1_500)), 2_000);
+    // An unavailable clock (e.g. before the UNIX epoch) returns the floor.
+    assert_eq!(monotonic_timestamp_ms(&floor, None), 2_000);
+    // Regressed readings did not lower the floor.
+    assert_eq!(monotonic_timestamp_ms(&floor, Some(2_500)), 2_500);
+}
+
+#[test]
+fn now_timestamp_ms_is_positive_and_non_decreasing() {
+    let first = now_timestamp_ms();
+    let second = now_timestamp_ms();
+    assert!(first > 0);
+    assert!(second >= first);
+}
+
+#[test]
+fn cycle_trace_filter_combinations_match_across_backends() {
+    assert_cycle_trace_filter_combinations(&InMemoryRuntimeJournal::default()).unwrap();
+
+    let path = create_temp_db_path("cycle-trace-filters");
+    let journal = SqliteRuntimeJournal::open(&path, 1_000).unwrap();
+    assert_cycle_trace_filter_combinations(&journal).unwrap();
+}
+
+struct CycleTraceFilterCase {
+    symbol: Option<&'static str>,
+    phase: Option<&'static str>,
+    outcome: Option<&'static str>,
+    bar_timestamp: Option<&'static str>,
+    expected_trace_ids: &'static [&'static str],
+}
+
+#[allow(clippy::too_many_lines)]
+fn assert_cycle_trace_filter_combinations(
+    journal: &dyn RuntimeJournal,
+) -> Result<(), StorageError> {
+    journal.append_cycle_trace(filter_test_cycle_trace_write(
+        "trace-1",
+        "aapl",
+        "AAPL",
+        "2026-01-01T00:01:00Z",
+        "confirmed",
+        "accepted_filled",
+    ))?;
+    journal.append_cycle_trace(filter_test_cycle_trace_write(
+        "trace-2",
+        "aapl",
+        "MSFT",
+        "2026-01-01T00:02:00Z",
+        "confirmed",
+        "blocked_risk",
+    ))?;
+    journal.append_cycle_trace(filter_test_cycle_trace_write(
+        "trace-3",
+        "aapl",
+        "AAPL",
+        "2026-01-01T00:02:00Z",
+        "preview",
+        "accepted_filled",
+    ))?;
+    journal.append_cycle_trace(filter_test_cycle_trace_write(
+        "trace-other-bot",
+        "msft",
+        "MSFT",
+        "2026-01-01T00:01:00Z",
+        "confirmed",
+        "accepted_filled",
+    ))?;
+
+    let cases = [
+        CycleTraceFilterCase {
+            symbol: None,
+            phase: None,
+            outcome: None,
+            bar_timestamp: None,
+            expected_trace_ids: &["trace-1", "trace-2", "trace-3"],
+        },
+        CycleTraceFilterCase {
+            symbol: Some("AAPL"),
+            phase: None,
+            outcome: None,
+            bar_timestamp: None,
+            expected_trace_ids: &["trace-1", "trace-3"],
+        },
+        CycleTraceFilterCase {
+            symbol: None,
+            phase: Some("confirmed"),
+            outcome: None,
+            bar_timestamp: None,
+            expected_trace_ids: &["trace-1", "trace-2"],
+        },
+        CycleTraceFilterCase {
+            symbol: None,
+            phase: None,
+            outcome: Some("accepted_filled"),
+            bar_timestamp: None,
+            expected_trace_ids: &["trace-1", "trace-3"],
+        },
+        CycleTraceFilterCase {
+            symbol: None,
+            phase: None,
+            outcome: None,
+            bar_timestamp: Some("2026-01-01T00:02:00Z"),
+            expected_trace_ids: &["trace-2", "trace-3"],
+        },
+        CycleTraceFilterCase {
+            symbol: Some("AAPL"),
+            phase: Some("preview"),
+            outcome: None,
+            bar_timestamp: None,
+            expected_trace_ids: &["trace-3"],
+        },
+        CycleTraceFilterCase {
+            symbol: Some("AAPL"),
+            phase: Some("confirmed"),
+            outcome: Some("accepted_filled"),
+            bar_timestamp: Some("2026-01-01T00:01:00Z"),
+            expected_trace_ids: &["trace-1"],
+        },
+        CycleTraceFilterCase {
+            symbol: Some("TSLA"),
+            phase: None,
+            outcome: None,
+            bar_timestamp: None,
+            expected_trace_ids: &[],
+        },
+    ];
+
+    for case in cases {
+        let records = journal.recent_cycle_traces_for_bot(
+            "aapl",
+            case.symbol,
+            case.phase,
+            case.outcome,
+            case.bar_timestamp,
+            10,
+        )?;
+        let trace_ids = records
+            .iter()
+            .map(|record| record.trace_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            trace_ids, case.expected_trace_ids,
+            "unexpected traces for symbol={:?} phase={:?} outcome={:?} bar_timestamp={:?}",
+            case.symbol, case.phase, case.outcome, case.bar_timestamp
+        );
+    }
+
+    // The limit keeps the most recent matches.
+    let limited = journal.recent_cycle_traces_for_bot("aapl", None, None, None, None, 2)?;
+    assert_eq!(
+        limited
+            .iter()
+            .map(|record| record.trace_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["trace-2", "trace-3"]
+    );
+
+    Ok(())
+}
+
+fn filter_test_cycle_trace_write(
+    trace_id: &str,
+    bot_id: &str,
+    symbol: &str,
+    bar_timestamp: &str,
+    phase: &str,
+    outcome: &str,
+) -> CycleTraceWrite {
+    CycleTraceWrite {
+        trace_id: trace_id.to_owned(),
+        bot_id: bot_id.to_owned(),
+        symbol: symbol.to_owned(),
+        bar_timestamp: bar_timestamp.to_owned(),
+        phase: phase.to_owned(),
+        trigger_kind: "market_bar".to_owned(),
+        signal: "buy_confirmed".to_owned(),
+        intent: "open_long".to_owned(),
+        risk_decision: "allowed".to_owned(),
+        outcome: outcome.to_owned(),
+        payload_json: "{}".to_owned(),
+    }
+}
+
 fn seed_sqlite_journal(journal: &dyn RuntimeJournal) -> Result<(), StorageError> {
     append_signal_flow_records(journal)?;
     append_order_flow_records(journal)?;
@@ -926,6 +1118,15 @@ fn sqlite_journal_creates_bot_recent_lookup_indexes() {
             "idx_reconciliations_bot_id_created_at_ms",
             "idx_reconciliations_bot_id_id_desc",
             "idx_reconciliations_bot_id_symbol_id_desc",
+        ],
+    );
+    assert_table_has_indexes(
+        &connection,
+        "cycle_traces",
+        &[
+            "idx_cycle_traces_bot_id_id_desc",
+            "idx_cycle_traces_bot_id_symbol_id_desc",
+            "idx_cycle_traces_bot_id_symbol_bar_timestamp_desc",
         ],
     );
 }

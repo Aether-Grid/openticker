@@ -19,6 +19,12 @@ pub enum ConfigError {
     Validation { message: String },
     #[error("failed to render TOML: {message}")]
     Render { message: String },
+    #[error("failed to load environment file `{path}`: {source}")]
+    Dotenv {
+        path: PathBuf,
+        #[source]
+        source: dotenvy::Error,
+    },
 }
 
 impl ConfigError {

@@ -1,6 +1,5 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
-use rusqlite::types::Value;
 
 const SQLITE_DEFAULT_READ_POOL_SIZE: usize = 4;
 const SQLITE_MIN_READ_POOL_SIZE: usize = 2;
@@ -52,7 +51,12 @@ impl SqliteRuntimeJournal {
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(busy_timeout)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        connection.pragma_update(None, "synchronous", "NORMAL")?;
+        // FULL (not NORMAL) on the write connection: with WAL + NORMAL, a
+        // power loss or OS crash can drop the most recent committed
+        // transactions. This journal persists order/fill records for a
+        // trading system, where losing acknowledged writes is worse than the
+        // extra fsync cost.
+        connection.pragma_update(None, "synchronous", "FULL")?;
         sqlite_migrations::run(&mut connection)?;
         Ok(connection)
     }
@@ -78,7 +82,7 @@ impl SqliteRuntimeJournal {
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, rusqlite::Error>,
     ) -> Result<T, StorageError> {
-        let connection = lock_mutex(&self.write_connection, "sqlite_write_connection")?;
+        let connection = lock_mutex(&self.write_connection, "sqlite_write_connection");
         operation(&connection).map_err(StorageError::from)
     }
 
@@ -97,6 +101,8 @@ impl SqliteRuntimeJournal {
 
         for offset in 0..read_pool_len {
             let index = (start + offset) % read_pool_len;
+            // `try_lock` treats a poisoned connection the same as busy; it
+            // gets skipped until the fallback slot's `lock_mutex` heals it.
             if let Ok(connection) = self.read_connections[index].try_lock() {
                 return operation(&connection).map_err(StorageError::from);
             }
@@ -106,7 +112,7 @@ impl SqliteRuntimeJournal {
         let connection = lock_mutex(
             &self.read_connections[fallback_index],
             "sqlite_read_connection",
-        )?;
+        );
         operation(&connection).map_err(StorageError::from)
     }
 }
@@ -316,7 +322,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, symbol, trace_id, bar_timestamp, phase, signal, close, metadata_json, created_at_ms
                 FROM signals
@@ -389,7 +395,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, symbol, trace_id, bar_timestamp, signal, intent, metadata_json, strategy_rationale, has_position_before, created_at_ms
                 FROM trade_intents
@@ -459,7 +465,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, symbol, trace_id, bar_timestamp, intent, decision, reason, created_at_ms
                 FROM risk_decisions
@@ -531,7 +537,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, symbol, trace_id, bar_timestamp, client_order_id, intent, status, price, quantity, created_at_ms
                 FROM orders
@@ -684,7 +690,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, symbol, trace_id, bar_timestamp, client_order_id, price, quantity, fee_asset, fee_amount, fee_normalized_usd, created_at_ms
                 FROM fills
@@ -804,7 +810,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, symbol, trace_id, bar_timestamp, has_position, quantity, entry_price, realized_pnl_usd, reason, created_at_ms
                 FROM positions
@@ -1006,53 +1012,44 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut query = String::from(
+            // Single static statement: SQLite prepares one plan at compile
+            // time — `bot_id` probe on `idx_cycle_traces_bot_id_id_desc`,
+            // newest-first, residual filters applied per row, sort-free.
+            // Optional-filter selectivity is traded for plan stability; this
+            // is acceptable because the query is LIMIT-bounded diagnostics.
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, trace_id, bot_id, symbol, bar_timestamp, phase, trigger_kind, signal, intent, risk_decision, outcome, created_at_ms, payload_json
                 FROM cycle_traces
-                WHERE bot_id = ?
+                WHERE bot_id = ?1
+                  AND (?2 IS NULL OR symbol = ?2)
+                  AND (?3 IS NULL OR phase = ?3)
+                  AND (?4 IS NULL OR outcome = ?4)
+                  AND (?5 IS NULL OR bar_timestamp = ?5)
+                ORDER BY id DESC
+                LIMIT ?6
                 ",
-            );
-            let mut query_params = vec![Value::from(bot_id.to_owned())];
-
-            if let Some(symbol) = symbol {
-                query.push_str(" AND symbol = ?");
-                query_params.push(Value::from(symbol.to_owned()));
-            }
-            if let Some(phase) = phase {
-                query.push_str(" AND phase = ?");
-                query_params.push(Value::from(phase.to_owned()));
-            }
-            if let Some(outcome) = outcome {
-                query.push_str(" AND outcome = ?");
-                query_params.push(Value::from(outcome.to_owned()));
-            }
-            if let Some(bar_timestamp) = bar_timestamp {
-                query.push_str(" AND bar_timestamp = ?");
-                query_params.push(Value::from(bar_timestamp.to_owned()));
-            }
-
-            query.push_str(" ORDER BY id DESC LIMIT ?");
-            query_params.push(Value::from(limit));
-
-            let mut statement = connection.prepare_cached(&query)?;
-            let rows = statement.query_map(params_from_iter(query_params), |row| {
-                Ok(CycleTraceRecord {
-                    id: row.get(0)?,
-                    trace_id: row.get(1)?,
-                    bot_id: row.get(2)?,
-                    symbol: row.get(3)?,
-                    bar_timestamp: row.get(4)?,
-                    phase: row.get(5)?,
-                    trigger_kind: row.get(6)?,
-                    signal: row.get(7)?,
-                    intent: row.get(8)?,
-                    risk_decision: row.get(9)?,
-                    outcome: row.get(10)?,
-                    created_at_ms: row.get(11)?,
-                    payload_json: row.get(12)?,
-                })
-            })?;
+            )?;
+            let rows = statement.query_map(
+                params![bot_id, symbol, phase, outcome, bar_timestamp, limit],
+                |row| {
+                    Ok(CycleTraceRecord {
+                        id: row.get(0)?,
+                        trace_id: row.get(1)?,
+                        bot_id: row.get(2)?,
+                        symbol: row.get(3)?,
+                        bar_timestamp: row.get(4)?,
+                        phase: row.get(5)?,
+                        trigger_kind: row.get(6)?,
+                        signal: row.get(7)?,
+                        intent: row.get(8)?,
+                        risk_decision: row.get(9)?,
+                        outcome: row.get(10)?,
+                        created_at_ms: row.get(11)?,
+                        payload_json: row.get(12)?,
+                    })
+                },
+            )?;
 
             let mut records = rows.collect::<Result<Vec<_>, _>>()?;
             records.reverse();
@@ -1062,7 +1059,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
     fn cycle_trace_by_id(&self, trace_id: &str) -> Result<Option<CycleTraceRecord>, StorageError> {
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, trace_id, bot_id, symbol, bar_timestamp, phase, trigger_kind, signal, intent, risk_decision, outcome, created_at_ms, payload_json
                 FROM cycle_traces
@@ -1352,7 +1349,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, bot_id, kind, payload, created_at_ms
                 FROM bot_events
@@ -1398,7 +1395,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT id, kind, payload, created_at_ms
                 FROM service_events
@@ -1449,7 +1446,7 @@ impl RuntimeJournal for SqliteRuntimeJournal {
 
     fn load_bot_snapshots(&self) -> Result<Vec<BotSnapshot>, StorageError> {
         self.with_connection(|connection| {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare_cached(
                 "
                 SELECT bot_id, state, execution_mode, enabled, updated_at_ms
                 FROM bot_snapshots
@@ -1472,39 +1469,19 @@ impl RuntimeJournal for SqliteRuntimeJournal {
     }
 
     fn prune_bots_except(&self, active_bot_ids: &HashSet<String>) -> Result<(), StorageError> {
-        let mut connection = lock_mutex(&self.write_connection, "sqlite_write_connection")?;
+        let mut connection = lock_mutex(&self.write_connection, "sqlite_write_connection");
         let transaction = connection.transaction()?;
 
         if active_bot_ids.is_empty() {
-            for table in [
-                "signals",
-                "trade_intents",
-                "risk_decisions",
-                "orders",
-                "fills",
-                "positions",
-                "cycle_traces",
-                "reconciliations",
-                "bot_events",
-                "bot_snapshots",
-            ] {
-                transaction.execute(&format!("DELETE FROM {table}"), [])?;
+            // No configured bots: prune ALL bot-scoped data (see the trait
+            // documentation for `RuntimeJournal::prune_bots_except`).
+            for table in BotScopedTable::ALL {
+                transaction.execute(&format!("DELETE FROM {}", table.table_name()), [])?;
             }
             transaction.execute("DELETE FROM runtime_events WHERE entity_id IS NOT NULL", [])?;
         } else {
-            for table in [
-                "signals",
-                "trade_intents",
-                "risk_decisions",
-                "orders",
-                "fills",
-                "positions",
-                "cycle_traces",
-                "reconciliations",
-                "bot_events",
-                "bot_snapshots",
-            ] {
-                delete_sqlite_rows_for_removed_bots(&transaction, table, "bot_id", active_bot_ids)?;
+            for table in BotScopedTable::ALL {
+                delete_sqlite_rows_for_removed_bots(&transaction, table, active_bot_ids)?;
             }
 
             let placeholders = std::iter::repeat_n("?", active_bot_ids.len())
@@ -1521,16 +1498,68 @@ impl RuntimeJournal for SqliteRuntimeJournal {
     }
 }
 
+/// Tables whose rows belong to a single bot via a `bot_id` column.
+///
+/// Pruning SQL is derived exclusively from this enum so that no
+/// caller-supplied strings can ever reach statement construction. The
+/// `runtime_events` table is intentionally absent: it is keyed by a nullable
+/// `entity_id` and pruned separately so that global events survive.
+#[derive(Debug, Clone, Copy)]
+enum BotScopedTable {
+    Signals,
+    TradeIntents,
+    RiskDecisions,
+    Orders,
+    Fills,
+    Positions,
+    CycleTraces,
+    Reconciliations,
+    BotEvents,
+    BotSnapshots,
+}
+
+impl BotScopedTable {
+    const ALL: [Self; 10] = [
+        Self::Signals,
+        Self::TradeIntents,
+        Self::RiskDecisions,
+        Self::Orders,
+        Self::Fills,
+        Self::Positions,
+        Self::CycleTraces,
+        Self::Reconciliations,
+        Self::BotEvents,
+        Self::BotSnapshots,
+    ];
+
+    const fn table_name(self) -> &'static str {
+        match self {
+            Self::Signals => "signals",
+            Self::TradeIntents => "trade_intents",
+            Self::RiskDecisions => "risk_decisions",
+            Self::Orders => "orders",
+            Self::Fills => "fills",
+            Self::Positions => "positions",
+            Self::CycleTraces => "cycle_traces",
+            Self::Reconciliations => "reconciliations",
+            Self::BotEvents => "bot_events",
+            Self::BotSnapshots => "bot_snapshots",
+        }
+    }
+}
+
 fn delete_sqlite_rows_for_removed_bots(
     connection: &Connection,
-    table: &str,
-    column: &str,
+    table: BotScopedTable,
     active_bot_ids: &HashSet<String>,
 ) -> Result<(), rusqlite::Error> {
     let placeholders = std::iter::repeat_n("?", active_bot_ids.len())
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("DELETE FROM {table} WHERE {column} NOT IN ({placeholders})");
+    let sql = format!(
+        "DELETE FROM {} WHERE bot_id NOT IN ({placeholders})",
+        table.table_name()
+    );
     connection.execute(&sql, params_from_iter(active_bot_ids.iter()))?;
     Ok(())
 }

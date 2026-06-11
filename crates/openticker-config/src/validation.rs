@@ -239,6 +239,15 @@ fn validate_storage(storage: &StorageConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Validates that a referenced secret environment variable is set.
+///
+/// The error message deliberately names the env var (e.g.
+/// `OPENTICKER_API_KEY`). The *name* is not a secret — it is public
+/// configuration that an operator must know to fix the problem — whereas the
+/// *value* is the secret. This function only checks `std::env::var(..).is_err()`
+/// and never reads, stores, or interpolates the value, so no secret material
+/// can leak into logs through this path. Naming the variable is the actionable
+/// diagnostic an operator needs, so it is intentionally retained.
 fn validate_secret_reference(secret_env: Option<&str>) -> Result<(), ConfigError> {
     let Some(secret_env) = secret_env else {
         return Ok(());
@@ -361,6 +370,16 @@ fn normalized_symbol_key(symbol: &str) -> String {
     symbol.trim().to_ascii_uppercase()
 }
 
+/// Validates an instance's budget percentage.
+///
+/// # Invariant
+///
+/// `budget.pct` is guaranteed finite (no NaN/Inf) and within `(0.0, 100.0]`
+/// *at load time* by this check. This is enforced only here, at config load;
+/// it is NOT re-checked on the hot path. Any runtime arithmetic that derives
+/// allocations from `budget.pct` MUST preserve finiteness (e.g. avoid dividing
+/// by a zero denominator or multiplying by a non-finite factor), because a
+/// reintroduced NaN/Inf would not be caught again after load.
 fn validate_instance_budget(instance: &InstanceConfig) -> Result<(), ConfigError> {
     let pct = instance.budget.pct;
     if !pct.is_finite() || pct <= 0.0 {
@@ -606,6 +625,19 @@ fn connector_supports_market(caps: ConnectorCapabilities, market: MarketType) ->
     }
 }
 
+/// Reports whether a data connector can emit *preview* (in-progress, unconfirmed)
+/// market-stream bars, which `signal_mode = "intrabar"` requires.
+///
+/// Only `binance` qualifies today: it is the sole connector that implements a
+/// real preview stream. See its `start_preview_stream_session` in
+/// `openticker-connectors/src/connectors/binance.rs`, which opens a websocket
+/// feed of partial klines. Other connectors (e.g. `alpaca`) implement only the
+/// confirmed-bar path, so intrabar mode would silently never fire.
+///
+/// This is kept as a single documented match (rather than a general capability
+/// framework) because preview support is currently a binary, connector-specific
+/// fact. When a second connector gains a preview stream, add its kind here and
+/// keep this comment in sync with the connector that implements it.
 fn connector_supports_preview_market_stream(kind: &str) -> bool {
     matches!(kind, "binance")
 }
@@ -644,6 +676,14 @@ fn validate_signal_delivery_mode(
 
 #[allow(clippy::too_many_lines)]
 fn validate_indicators(instance: &InstanceConfig, live_account: bool) -> Result<(), ConfigError> {
+    // NOTE: `indicator.params` is intentionally NOT validated structurally here.
+    // The `toml::Table` type already guarantees the section is a table (a
+    // non-table value fails at deserialization), but per-key shape/type
+    // validation requires the per-indicator parameter schemas, which live in the
+    // indicator crate (behind the `indicators` feature) and are unavailable to
+    // this crate without a dependency cycle. Params are validated when an engine
+    // is built via `openticker_registry::build_engine`. See the doc comment on
+    // `IndicatorInstanceConfig::params` for the full contract.
     let mut indicator_ids = HashSet::new();
     let mut minimum_warmup_bars = 0usize;
     for indicator in &instance.indicators {

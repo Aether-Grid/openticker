@@ -2,7 +2,8 @@ use openticker_core::{ExecutionMode, OhlcvBar, Timeframe};
 use openticker_data::NormalizedOrderEvent;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError};
+use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError};
+use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -245,21 +246,54 @@ pub enum ConnectorPreviewStreamCommand {
     Shutdown,
 }
 
+/// Capacity of the preview-stream command channel. Commands are rare
+/// (subscription changes and shutdown), so a small queue suffices.
+pub const PREVIEW_STREAM_COMMAND_CAPACITY: usize = 32;
+
+/// Capacity of the preview-stream event channel. Bounding the queue caps the
+/// memory a stalled consumer can pin: when the channel is full the producing
+/// worker drops the event (staleness is acceptable for a preview stream) rather
+/// than growing without bound (which previously risked OOM).
+pub const PREVIEW_STREAM_EVENT_CAPACITY: usize = 1_024;
+
+/// Handle to a running preview-stream worker task plus its command/event
+/// channels.
+///
+/// The session owns the worker's [`JoinHandle`] and aborts it on drop, so a
+/// dropped session never leaves an orphaned task running. The worker is
+/// therefore tracked for its whole lifetime: a panicked or finished task is
+/// observable because the bounded event channel closes (surfaced as
+/// `TryRecvError::Disconnected` to the consumer) and [`is_finished`] reports
+/// the task's terminal state directly.
+///
+/// [`is_finished`]: ConnectorPreviewStreamSession::is_finished
 pub struct ConnectorPreviewStreamSession {
-    command_tx: UnboundedSender<ConnectorPreviewStreamCommand>,
-    event_rx: UnboundedReceiver<ConnectorPreviewStreamEvent>,
+    command_tx: Sender<ConnectorPreviewStreamCommand>,
+    event_rx: Receiver<ConnectorPreviewStreamEvent>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl ConnectorPreviewStreamSession {
     #[must_use]
     pub fn new(
-        command_tx: UnboundedSender<ConnectorPreviewStreamCommand>,
-        event_rx: UnboundedReceiver<ConnectorPreviewStreamEvent>,
+        command_tx: Sender<ConnectorPreviewStreamCommand>,
+        event_rx: Receiver<ConnectorPreviewStreamEvent>,
+        worker: JoinHandle<()>,
     ) -> Self {
         Self {
             command_tx,
             event_rx,
+            worker: Some(worker),
         }
+    }
+
+    /// Returns `true` once the worker task has finished (returned or panicked),
+    /// letting callers detect a dead task that can no longer produce events.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.worker
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished)
     }
 
     /// # Errors
@@ -270,7 +304,7 @@ impl ConnectorPreviewStreamSession {
         subscriptions: Vec<ConnectorMarketStreamSubscription>,
     ) -> Result<(), String> {
         self.command_tx
-            .send(ConnectorPreviewStreamCommand::ReplaceSubscriptions(
+            .try_send(ConnectorPreviewStreamCommand::ReplaceSubscriptions(
                 subscriptions,
             ))
             .map_err(|error| format!("preview stream session closed: {error}"))
@@ -281,7 +315,7 @@ impl ConnectorPreviewStreamSession {
     /// Returns an error if the preview session command channel has already closed.
     pub fn shutdown(&self) -> Result<(), String> {
         self.command_tx
-            .send(ConnectorPreviewStreamCommand::Shutdown)
+            .try_send(ConnectorPreviewStreamCommand::Shutdown)
             .map_err(|error| format!("preview stream session closed: {error}"))
     }
 
@@ -291,6 +325,18 @@ impl ConnectorPreviewStreamSession {
     /// `Err(TryRecvError::Disconnected)` when the session has ended.
     pub fn try_recv(&mut self) -> Result<ConnectorPreviewStreamEvent, TryRecvError> {
         self.event_rx.try_recv()
+    }
+}
+
+impl Drop for ConnectorPreviewStreamSession {
+    fn drop(&mut self) {
+        // Abort the worker so a dropped session never leaves an orphaned task
+        // running. A `JoinHandle` dropped without `abort` keeps its task alive;
+        // closing the command channel would normally stop the worker, but
+        // aborting is unconditional and immediate even if the worker is wedged.
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
     }
 }
 

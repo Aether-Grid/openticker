@@ -94,8 +94,16 @@ fn proof_release_cannot_make_committed_notional_negative() {
     let mut ledger = AccountLedger::new(1_000.0);
     let owner = owner();
 
-    ledger.release_reservation(&owner, f64::from((kani::any::<u8>() % 20) + 1) * 10.0);
-    ledger.release_position(&owner, f64::from((kani::any::<u8>() % 20) + 1) * 10.0);
+    assert!(
+        ledger
+            .release_reservation(&owner, f64::from((kani::any::<u8>() % 20) + 1) * 10.0)
+            .is_ok()
+    );
+    assert!(
+        ledger
+            .release_position(&owner, f64::from((kani::any::<u8>() % 20) + 1) * 10.0)
+            .is_ok()
+    );
 
     assert!(ledger.total_committed_notional_usd() >= 0.0);
     assert!(ledger.total_reserved_open_notional_usd() >= 0.0);

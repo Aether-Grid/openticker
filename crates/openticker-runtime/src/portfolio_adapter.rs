@@ -99,6 +99,19 @@ mod tests {
     use crate::test_support::fixture_bundle;
     use openticker_ledger::{AccountLedger, LedgerException, LedgerExceptionKind, LedgerOwnerPath};
 
+    /// Asserts approximate equality for ledger-derived USD values using a
+    /// relative tolerance (mirroring the ledger's own 1e-9 value tolerance),
+    /// so accumulated rounding from ledger arithmetic and JSON round-trips
+    /// cannot make the comparison brittle.
+    #[track_caller]
+    fn assert_usd_approx_eq(actual: f64, expected: f64) {
+        let tolerance = expected.abs().max(1.0) * 1e-9;
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected approximately {expected}, got {actual}"
+        );
+    }
+
     #[test]
     fn account_capital_ledger_rejects_bot_and_account_caps() {
         let mut ledger = AccountLedger::new(1_000.0);
@@ -138,7 +151,7 @@ mod tests {
         ledger.reconcile_open_fill(&owner, 200.0, 500.0);
         assert!((ledger.bot_attributed_open_notional_usd("bot-a") - 200.0).abs() < 1e-6);
 
-        ledger.release_position(&owner, 50.0);
+        assert!(ledger.release_position(&owner, 50.0).is_ok());
         assert!((ledger.bot_attributed_open_notional_usd("bot-a") - 150.0).abs() < 1e-6);
     }
 
@@ -282,7 +295,7 @@ mod tests {
 
         assert_eq!(payload["symbol"], "AAPL");
         assert_eq!(payload["bar_timestamp"], "2030-01-01T00:00:00+00:00");
-        assert!((committed - 4_000.0).abs() < 1e-6);
-        assert!((tradeable_room - 6_000.0).abs() < 1e-6);
+        assert_usd_approx_eq(committed, 4_000.0);
+        assert_usd_approx_eq(tradeable_room, 6_000.0);
     }
 }

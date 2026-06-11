@@ -4,6 +4,7 @@ mod market;
 mod signals;
 mod timeframe;
 mod trade;
+mod util;
 
 pub use error::CoreError;
 pub use identifiers::{AccountId, BotLaneKey, InstanceId};
@@ -15,3 +16,4 @@ pub use signals::{
 };
 pub use timeframe::Timeframe;
 pub use trade::TradeIntent;
+pub use util::usize_to_f64;

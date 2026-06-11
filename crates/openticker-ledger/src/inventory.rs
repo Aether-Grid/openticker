@@ -172,6 +172,22 @@ impl InventoryState {
                 self.realized_pnl.gross_usd += gross_pnl_usd;
                 self.realized_pnl.fees_usd += fee_usd;
                 self.realized_pnl.net_usd += gross_pnl_usd - fee_usd;
+                // Accounting invariant: realized P&L accumulators must stay
+                // finite. f64 overflow to +/-Inf would corrupt all downstream
+                // accounting, so assert finiteness rather than silently
+                // clamping (which would itself corrupt the books).
+                debug_assert!(
+                    self.realized_pnl.gross_usd.is_finite(),
+                    "realized gross P&L overflowed to a non-finite value"
+                );
+                debug_assert!(
+                    self.realized_pnl.fees_usd.is_finite(),
+                    "realized fees overflowed to a non-finite value"
+                );
+                debug_assert!(
+                    self.realized_pnl.net_usd.is_finite(),
+                    "realized net P&L overflowed to a non-finite value"
+                );
 
                 let remaining_quantity = (lot.quantity - quantity).max(0.0);
                 if remaining_quantity <= LEDGER_VALUE_TOLERANCE {
@@ -391,5 +407,46 @@ mod tests {
                 })
                 .is_none()
         );
+    }
+
+    #[test]
+    fn large_pnl_accumulation_stays_finite() {
+        // Realistic-extreme scenario: a very large position repeatedly sold in
+        // chunks at a steep markup. This validates that the realized-P&L
+        // accumulators stay finite and arithmetically correct across many
+        // iterations. At these magnitudes (~1e18, ~290 orders of magnitude below
+        // f64::MAX) true f64 overflow to +/-Inf is not reachable, so the
+        // finiteness debug_assert is defense-in-depth rather than an exercised
+        // failure path.
+        let mut inventory = InventoryState::default();
+        let huge_quantity = 1.0e12;
+        let entry_price = 1.0e6;
+        inventory
+            .apply_fill(InventoryFillSide::Buy, huge_quantity, entry_price, None)
+            .unwrap();
+
+        let chunk = huge_quantity / 1_000.0;
+        let exit_price = entry_price * 2.0;
+        for _ in 0..1_000 {
+            inventory
+                .apply_fill(
+                    InventoryFillSide::Sell,
+                    chunk,
+                    exit_price,
+                    Some(&FeeEntry {
+                        asset: "USD".to_owned(),
+                        amount: 1.0e3,
+                        normalized_usd: Some(1.0e3),
+                    }),
+                )
+                .unwrap();
+        }
+
+        assert!(inventory.realized_pnl.gross_usd.is_finite());
+        assert!(inventory.realized_pnl.fees_usd.is_finite());
+        assert!(inventory.realized_pnl.net_usd.is_finite());
+        assert!(inventory.realized_pnl.gross_usd > 0.0);
+        // gross = qty * (exit - entry) = 1e12 * 1e6 = 1e18; net subtracts fees.
+        assert!((inventory.realized_pnl.gross_usd - 1.0e18).abs() / 1.0e18 < 1e-9);
     }
 }

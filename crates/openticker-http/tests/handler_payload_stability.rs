@@ -24,7 +24,9 @@ async fn status_payload_is_stable() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = to_bytes(response.into_body(), common::MAX_TEST_RESPONSE_BYTES)
+        .await
+        .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(value.get("totalInstances").is_some() || value.get("total_instances").is_some());
 }
