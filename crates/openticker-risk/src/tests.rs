@@ -1,6 +1,7 @@
 use openticker_core::TradeIntent;
 
-use super::*;
+use crate::policy::{BasicRiskPolicy, RiskPolicy};
+use crate::types::{RiskContext, RiskDecision, RiskLimits};
 
 fn baseline_policy() -> BasicRiskPolicy {
     BasicRiskPolicy {

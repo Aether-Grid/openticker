@@ -74,6 +74,14 @@ impl Default for DataPlaneConfig {
     }
 }
 
+const fn default_data_plane_polling_interval_ms() -> u64 {
+    5_000
+}
+
+const fn default_data_plane_retention() -> usize {
+    500
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataPlaneWatchlistEntry {
     pub account: String,
@@ -103,6 +111,14 @@ pub struct AccountConfig {
     #[serde(default)]
     pub cash_balance_assets: Vec<String>,
     pub total_budget_usd: f64,
+}
+
+impl AccountConfig {
+    #[must_use]
+    pub fn execution_remote_submission_enabled(&self) -> bool {
+        self.execution_remote_submission
+            .unwrap_or(self.reconciliation_remote_snapshot)
+    }
 }
 
 /// An API-facing account update payload: every [`AccountConfig`] field except
@@ -222,6 +238,14 @@ pub struct InstanceConfig {
     pub allow_live: bool,
 }
 
+const fn default_instance_polling_enabled() -> bool {
+    true
+}
+
+const fn default_instance_polling_interval_ms() -> u64 {
+    1_000
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetConfig {
     pub pct: f64,
@@ -232,22 +256,6 @@ pub struct ExecutionConstraintsConfig {
     pub quantity_step: Option<f64>,
     pub min_quantity: Option<f64>,
     pub min_notional_usd: Option<f64>,
-}
-
-const fn default_instance_polling_enabled() -> bool {
-    true
-}
-
-const fn default_instance_polling_interval_ms() -> u64 {
-    1_000
-}
-
-const fn default_data_plane_polling_interval_ms() -> u64 {
-    5_000
-}
-
-const fn default_data_plane_retention() -> usize {
-    500
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -326,42 +334,4 @@ pub struct ConfigBundle {
     pub accounts: Vec<AccountConfig>,
     pub risk_profiles: Vec<RiskProfileConfig>,
     pub instances: Vec<InstanceConfig>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EffectiveConfig {
-    pub global: GlobalConfig,
-    pub accounts: Vec<EffectiveAccountConfig>,
-    pub risk_profiles: Vec<RiskProfileConfig>,
-    #[serde(rename = "bots")]
-    pub instances: Vec<InstanceConfig>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EffectiveAccountConfig {
-    pub id: String,
-    pub kind: String,
-    pub mode: ExecutionMode,
-    pub use_demo_mode: bool,
-    pub reconciliation_remote_snapshot: bool,
-    pub execution_remote_submission: bool,
-    pub reconciliation_base_url: Option<String>,
-    pub cash_balance_assets: Vec<String>,
-    pub total_budget_usd: f64,
-    pub secret_status: AccountSecretStatus,
-}
-
-impl AccountConfig {
-    #[must_use]
-    pub fn execution_remote_submission_enabled(&self) -> bool {
-        self.execution_remote_submission
-            .unwrap_or(self.reconciliation_remote_snapshot)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AccountSecretStatus {
-    pub api_key_present: bool,
-    pub api_secret_present: bool,
-    pub passphrase_present: bool,
 }

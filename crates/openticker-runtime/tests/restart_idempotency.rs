@@ -13,8 +13,11 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Table;
+
+mod common;
+
+use common::{create_temp_db_path, request_path};
 
 #[test]
 fn restart_does_not_duplicate_existing_order_chain() {
@@ -132,15 +135,6 @@ fn read_http_request(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&data).into_owned()
 }
 
-fn request_path(request: &str) -> String {
-    request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/")
-        .to_owned()
-}
-
 fn write_http_response(stream: &mut TcpStream, status: &str, body: &str) {
     let response = format!(
         "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -242,12 +236,4 @@ fn fixture_bundle_with_storage(
             allow_live: false,
         }],
     }
-}
-
-fn create_temp_db_path(prefix: &str) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic")
-        .as_nanos();
-    std::env::temp_dir().join(format!("openticker-runtime-{prefix}-{timestamp}.db"))
 }

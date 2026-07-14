@@ -19,12 +19,12 @@ The crate currently has three main pieces:
 
 The crate is organized into a small set of focused modules:
 
-- `src/lib.rs` for shared record and write models, the `RuntimeJournal` trait, and shared helpers
+- `src/lib.rs` for the module tree and public re-exports
+- `src/records.rs` and `src/journal.rs` for the persistence models and journal contract
 - `src/operator_read_models.rs` for in-memory projected operator query state
-- `src/in_memory_impl.rs` for `InMemoryRuntimeJournal`
-- `src/sqlite_impl.rs` for `SqliteRuntimeJournal`
-- `src/sqlite_migrations.rs` for embedded SQLite schema initialization and schema-version checks
-- `src/tests.rs` for crate tests
+- `src/in_memory.rs` for `InMemoryRuntimeJournal`
+- `src/sqlite/` for `SqliteRuntimeJournal`, its journal implementation, and migrations
+- `src/tests/` for crate tests and shared fixtures
 
 ## Data Model
 

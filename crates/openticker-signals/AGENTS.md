@@ -9,13 +9,13 @@ This crate owns the object-safe indicator contract, shared indicator helpers, bu
 ## Package And Commands
 
 - Cargo package: `openticker-signals`
-- Main files: `src/lib.rs`, `src/common.rs`, `src/manifest.rs`, `src/observability.rs`, `src/registry.rs`, `src/indicators/mod.rs`
+- Main files: `src/lib.rs`, `src/engine.rs`, `src/common/mod.rs`, `src/manifest.rs`, `src/observability.rs`, `src/registry.rs`, `src/indicators/mod.rs`
 - Verify: `cargo test -p openticker-signals`
 
 ## Current Working Shape
 
 - `IndicatorEngine` is the common contract.
-- `common.rs` holds reusable math and time-series helpers.
+- `src/common/` holds reusable math and time-series helpers (`rolling.rs`, `crossings.rs`, `params.rs`); `src/engine.rs` holds the `IndicatorEngine` contract re-exported from `src/lib.rs`.
 - `manifest.rs` is the built-in capability and classification table derived from the built-in descriptor registry.
 - Built-in indicator modules now live under `src/indicators/` and are re-exported from `src/lib.rs`.
 - `registry.rs` exposes the built-in descriptor list used by the cross-crate indicator registry.
@@ -26,7 +26,7 @@ This crate owns the object-safe indicator contract, shared indicator helpers, bu
 - Keep indicator logic pure and deterministic.
 - Update `manifest.rs` whenever you add, rename, remove, or materially reclassify an indicator.
 - Preserve preview-versus-confirmed and stability-class intent.
-- Shared math helpers belong in `common.rs` only when reuse is real.
+- Shared math helpers belong in `src/common/` only when reuse is real.
 
 ## Common Change Recipes
 

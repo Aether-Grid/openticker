@@ -61,16 +61,18 @@ Important public helpers:
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | DTOs, ownership helpers, account-refresh mapping, and tests |
-
-Logical sections:
-
-1. lane/account DTOs
-2. snapshot sorting helper
-3. ownership and exception helpers
-4. account-risk and live-balance helpers
-5. symbol/reason matching helpers
-6. module-local tests
+| `src/lib.rs` | Module declarations, shared tolerance constant, and public re-exports |
+| `src/balances.rs` | Live-balance derivation from connector snapshots |
+| `src/exceptions.rs` | Ledger exception derivation (deficits, unmapped managed orders) |
+| `src/exposure.rs` | Account symbol exposure and connector-position ownership resolution |
+| `src/lanes.rs` | Lane/account view DTOs and account-risk rollup |
+| `src/ledger_sync.rs` | Ledger snapshot composition, room queries, and refresh/sync application |
+| `src/orders.rs` | Open-order identity, filtering, and managed/external classification |
+| `src/positions.rs` | Position-record authority rules and latest-position lookups |
+| `src/reconciliation.rs` | Reconciliation assessment assembly and reason parsing |
+| `src/rejections.rs` | Ledger rejection payload DTOs and builders |
+| `src/symbols.rs` | Connector-symbol vs lane-symbol matching helpers |
+| `src/tests.rs` | Module-local tests |
 
 ## Direct Dependency Wiring
 

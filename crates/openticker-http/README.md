@@ -1,6 +1,6 @@
 # openticker-http
 
-Last reviewed: 2026-04-19
+Last reviewed: 2026-07-14
 
 HTTP control-plane API for OpenTicker.
 
@@ -14,12 +14,17 @@ The crate is now split by concern:
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | Crate root, public re-exports, and integration-style HTTP tests |
-| `src/constants.rs` | Public route constants, OpenAPI route descriptor list, OpenAPI document generation, shared constants |
+| `src/lib.rs` | Small crate root and public re-exports |
+| `src/constants.rs` | Public route paths, embedded dashboard assets, limits, and timeouts |
+| `src/openapi.rs` | OpenAPI route descriptor list and generated document |
 | `src/state.rs` | `HttpState` and HTTP response or projection structs |
 | `src/router.rs` | `build_router(...)` and Axum route wiring |
-| `src/handlers.rs` | Endpoint handlers plus handler-local helper logic |
+| `src/handlers/` | Endpoint-domain handlers and shared HTTP error/query helpers |
+| `src/config_ops.rs` | Config reload validation, application, and status tracking |
+| `src/config_watcher.rs` | Debounced on-disk config change monitoring |
+| `src/config_write_handlers.rs` | Validated config mutation endpoints |
 | `src/runtime.rs` | `load_http_state(...)`, `serve(...)`, and runtime-owned polling supervisor wiring |
+| `src/tests/` | Domain-grouped in-process router tests |
 | `static/dist/index.html` | Embedded dashboard frontend served at `/` and `/dashboard` |
 
 ## Route Groups
@@ -29,7 +34,7 @@ The current route set includes:
 - `/healthz`, `/readyz`, `/metrics`, `/openapi.json`
 - `/dashboard` and `/`
 - `/v1/service/status`, `/v1/ledger`, `/v1/ledger/accounts`, `/v1/ledger/bots`, and `/v1/ledger/lanes`
-- `/v1/config/reload`, `/v1/config/effective`
+- `/v1/config/reload`, `/v1/config/reload/status`, `/v1/config/effective`, and validated config write routes
 - `/v1/connectors/matrix`, `/v1/connectors/status`
 - `/v1/data/streams` and `/v1/data/streams/{account}/{symbol}/{timeframe}/bars`
 - `/v1/events`, `/v1/signals`, `/v1/intents`, `/v1/risk-decisions`, `/v1/orders`, `/v1/fills`, `/v1/positions`, `/v1/reconciliations`
@@ -43,7 +48,8 @@ The current route set includes:
 3. `build_router` wires handlers and HTTP tracing middleware.
 4. Handlers use read or write locks around runtime state and return normalized JSON (except text or HTML endpoints).
 5. `/metrics` renders Prometheus-style text from runtime status and dataplane polling metrics.
-6. `/openapi.json` is generated from the route descriptor list in `constants.rs`.
+6. `/openapi.json` is generated from the route descriptor list in `openapi.rs`.
+7. Optional bearer-token authentication, request-body limits, and bounded journal queries are applied at the HTTP boundary.
 
 ## Background Polling
 
@@ -61,13 +67,14 @@ runtime-owned loop:
 
 ## Current State
 
-- The crate is modularized, but `handlers.rs` is still large and contains multiple endpoint domains.
+- Handlers are grouped by endpoint domain under `src/handlers/`; shared transport concerns remain in `handlers/mod.rs`.
+- Managed config supports status/history reporting, validated writes, and filesystem-watched reloads.
 - The dashboard source lives in `static/src/pages/index.astro`, and Rust embeds `static/dist/index.html`.
 - Handler outputs are intentionally JSON-first because the CLI and dashboard both consume them.
 
 ## Refactor Notes
 
-- If route surface area keeps growing, split `handlers.rs` into endpoint-domain modules.
+- Keep new handlers in the matching endpoint-domain module instead of growing `handlers/mod.rs`.
 - Keep polling ownership in `openticker-runtime`; this crate should stay focused
   on control-plane wiring and handler behavior.
 - Keep route additions aligned with the generated OpenAPI route list and CLI/dashboard consumers.

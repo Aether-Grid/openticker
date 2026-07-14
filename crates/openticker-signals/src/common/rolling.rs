@@ -1,0 +1,113 @@
+use openticker_core::usize_to_f64;
+use std::collections::VecDeque;
+
+#[derive(Debug, Clone)]
+pub(crate) struct Sma {
+    length: usize,
+    values: VecDeque<f64>,
+    sum: f64,
+}
+
+impl Sma {
+    pub(crate) fn new(length: usize) -> Self {
+        Self {
+            length,
+            values: VecDeque::new(),
+            sum: 0.0,
+        }
+    }
+
+    pub(crate) fn update(&mut self, value: f64) -> Option<f64> {
+        self.values.push_back(value);
+        self.sum += value;
+        if self.values.len() > self.length
+            && let Some(removed) = self.values.pop_front()
+        {
+            self.sum -= removed;
+        }
+
+        if self.values.len() == self.length {
+            Some(self.sum / usize_to_f64(self.length))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WilderRma {
+    length: usize,
+    samples: usize,
+    seed_sum: f64,
+    current: Option<f64>,
+}
+
+impl WilderRma {
+    pub(crate) fn new(length: usize) -> Self {
+        Self {
+            length,
+            samples: 0,
+            seed_sum: 0.0,
+            current: None,
+        }
+    }
+
+    pub(crate) fn update(&mut self, value: f64) -> Option<f64> {
+        if let Some(previous) = self.current {
+            let length = usize_to_f64(self.length);
+            let next = previous + ((value - previous) / length);
+            self.current = Some(next);
+            self.current
+        } else {
+            self.samples += 1;
+            self.seed_sum += value;
+            if self.samples < self.length {
+                None
+            } else {
+                let seeded = self.seed_sum / usize_to_f64(self.length);
+                self.current = Some(seeded);
+                self.current
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Rsi {
+    up: WilderRma,
+    down: WilderRma,
+    prev: Option<f64>,
+}
+
+impl Rsi {
+    pub(crate) fn new(length: usize) -> Self {
+        Self {
+            up: WilderRma::new(length),
+            down: WilderRma::new(length),
+            prev: None,
+        }
+    }
+
+    pub(crate) fn update(&mut self, value: f64) -> Option<f64> {
+        let change = if let Some(previous) = self.prev {
+            value - previous
+        } else {
+            self.prev = Some(value);
+            return None;
+        };
+        self.prev = Some(value);
+
+        let up = self.up.update(change.max(0.0));
+        let down = self.down.update((-change).max(0.0));
+
+        match (up, down) {
+            (Some(_), Some(0.0)) => Some(100.0),
+            (Some(0.0), Some(_)) => Some(0.0),
+            (Some(up_value), Some(down_value)) => {
+                let rs = up_value / down_value;
+                Some(100.0 - (100.0 / (1.0 + rs)))
+            }
+            _ => None,
+        }
+    }
+}

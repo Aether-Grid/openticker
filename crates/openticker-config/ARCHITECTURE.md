@@ -53,11 +53,19 @@ The crate is module-split by concern.
 | Path | Responsibility |
 | --- | --- |
 | `src/lib.rs` | Module wiring and public re-exports |
-| `src/model.rs` | Schema structs and bundle/effective-config model types |
+| `src/model.rs` | Loaded schema structs and `ConfigBundle` |
+| `src/effective.rs` | Secret-safe effective-config types and projection |
 | `src/loading.rs` | Dotenv loading, directory resolution, and TOML readers |
-| `src/validation.rs` | Semantic validation and effective-config projection |
+| `src/sources.rs` | Parsed configuration entities mapped to source files |
+| `src/writing.rs` | Structure-preserving TOML rendering and atomic writes |
+| `src/validation/mod.rs` | Validation orchestration and cross-file identity checks |
+| `src/validation/account.rs` | Account validation rules |
+| `src/validation/connectors.rs` | Connector capability matrix |
+| `src/validation/instance.rs` | Instance, connector-binding, budget, and execution rules |
+| `src/validation/indicators.rs` | Manifest-driven indicator rules |
+| `src/validation/global.rs` | Storage and data-plane rules |
 | `src/error.rs` | `ConfigError` definition |
-| `src/tests.rs` | Crate-level tests |
+| `src/tests/` | Focused loading, validation, source, and writing tests |
 
 ## Direct Dependency Wiring
 
@@ -66,11 +74,11 @@ Workspace dependencies:
 | Crate | Used For |
 | --- | --- |
 | `openticker-core` | Shared enums and types such as `ExecutionMode`, `MarketType`, `Timeframe`, `IndicatorRole`, `IndicatorSignalPolicy`, `IndicatorStabilityClass` |
-| `openticker-signals` | Indicator manifest lookup during validation |
+| `openticker-registry` | Build-specific indicator manifest lookup during validation |
 
 Important point:
 
-- validation uses `openticker_signals::indicator_manifest(...)`, but runtime instantiation still happens elsewhere in `openticker-runtime`
+- validation uses `openticker_registry::indicator_manifest(...)`, while runtime instantiation remains in the runtime composition path
 
 ## Inbound Wiring
 
@@ -85,7 +93,7 @@ Primary consumers:
 Outbound dependencies are narrow:
 
 - to `openticker-core` for domain enums and identifiers used in schema
-- to `openticker-signals` for manifest-driven indicator validation
+- to `openticker-registry` for manifest-driven indicator validation
 
 This crate does not call into runtime, connectors, or HTTP code.
 

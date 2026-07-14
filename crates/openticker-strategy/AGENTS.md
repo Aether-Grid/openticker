@@ -18,7 +18,7 @@ This crate maps indicator outputs into normalized trade intents. It should stay 
 - `SingleIndicatorLongOnlyStrategy` handles one representative signal.
 - `ConsensusLongOnlyStrategy` handles weighted multi-indicator decisions with filter veto behavior.
 - Input types are intentionally lightweight and runtime-agnostic.
-- Tests live in `src/tests.rs` and cover single-indicator and consensus behavior.
+- Tests live in `src/tests/` (`single_indicator.rs`, `consensus.rs`, shared fixtures in `mod.rs`) and cover single-indicator and consensus behavior.
 
 ## Invariants
 

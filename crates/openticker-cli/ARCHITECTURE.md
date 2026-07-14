@@ -32,12 +32,12 @@ Important command-side functions:
 - `handle_instance_command(...)` and `run_auto_tick(...)` in `src/commands/instance.rs`
 - `api_request_json(...)`, `fetch_and_print(...)`, `post_and_print(...)`, and `extract_live_mode_banner(...)` in `src/api.rs`
 
-Important dashboard-side functions and types in `src/dashboard.rs`:
+Important dashboard-side functions and types in `src/dashboard/`:
 
-- `dashboard::run(...)`
-- `DashboardApp`
-- `fetch_snapshot(...)`
-- `BotOperation`
+- `dashboard::run(...)` in `src/dashboard/mod.rs`
+- `DashboardApp` in `src/dashboard/app.rs`
+- `fetch_snapshot(...)` in `src/dashboard/client.rs`
+- `BotOperation` in `src/dashboard/app.rs`
 
 ## Internal Layout
 
@@ -52,7 +52,13 @@ Important dashboard-side functions and types in `src/dashboard.rs`:
 | `src/commands/instance.rs` | `instance` command handling and `auto-tick` loop |
 | `src/api.rs` | Generic HTTP request helpers, JSON printing, live-mode warning extraction |
 | `src/tracing_setup.rs` | Tracing subscriber and file logging setup |
-| `src/dashboard.rs` | Ratatui state, snapshot fetching, key handling, rendering, tests |
+| `src/dashboard/mod.rs` | Dashboard entry point and terminal event loop |
+| `src/dashboard/models.rs` | Serde response models and composite snapshot |
+| `src/dashboard/client.rs` | Dashboard HTTP snapshot fetching and request helper |
+| `src/dashboard/app.rs` | Dashboard state, selection, confirmation, and bot operations |
+| `src/dashboard/input.rs` | Key-event and destructive-action confirmation handling |
+| `src/dashboard/ui.rs` | Pane rendering and text formatting |
+| `src/dashboard/terminal.rs` | Raw-mode terminal guard and ratatui terminal setup |
 
 Logical split:
 
@@ -60,8 +66,8 @@ Logical split:
 2. command dispatch and grouped handlers (`src/commands/*`)
 3. generic HTTP request helpers and JSON printing (`src/api.rs`)
 4. tracing and log bootstrap (`src/tracing_setup.rs`)
-5. dashboard state and rendering loop (`src/dashboard.rs`)
-6. dashboard snapshot fetch and actions (`src/dashboard.rs`)
+5. dashboard state and rendering loop (`src/dashboard/mod.rs`, `src/dashboard/app.rs`, `src/dashboard/input.rs`, `src/dashboard/ui.rs`, `src/dashboard/terminal.rs`)
+6. dashboard snapshot fetch and actions (`src/dashboard/client.rs`, `src/dashboard/models.rs`)
 
 ## Direct Dependency Wiring
 
@@ -112,7 +118,7 @@ The dashboard is also HTTP-driven. It does not reach into runtime internals dire
 
 ## Current Implementation Realities
 
-- Command-side code is now split by concern (`cli`, `commands`, `api`, `tracing_setup`) while dashboard logic remains in one large file.
+- Command-side code is split by concern (`cli`, `commands`, `api`, `tracing_setup`); dashboard logic is split by concern under `src/dashboard/`.
 - There is no shared typed API client; many command paths work with generic `serde_json::Value` output.
 - Endpoint paths and response-shape assumptions are duplicated in command handlers and dashboard code.
 - Live-mode warnings are extracted heuristically from returned JSON rather than from a dedicated typed contract.

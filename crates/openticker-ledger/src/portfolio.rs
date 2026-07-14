@@ -1,6 +1,7 @@
 use serde::Serialize;
 
-use crate::{LedgerException, LedgerOwnerPath};
+use crate::exceptions::LedgerException;
+use crate::ownership::LedgerOwnerPath;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LanePortfolioSnapshot {

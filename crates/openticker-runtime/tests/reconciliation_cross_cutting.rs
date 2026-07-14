@@ -8,8 +8,11 @@ use openticker_core::{ExecutionMode, IndicatorSignalMetadataFilters, MarketType,
 use openticker_runtime::{LaneRuntimeState, Runtime, ServiceError};
 use openticker_storage::{BotSnapshotWrite, PositionWrite, RuntimeJournal, SqliteRuntimeJournal};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Table;
+
+mod common;
+
+use common::create_temp_db_path;
 
 const POSITION_TOLERANCE: f64 = 1e-9;
 
@@ -403,12 +406,4 @@ fn fixture_bundle_with_db_path(db_path: PathBuf) -> ConfigBundle {
             allow_live: false,
         }],
     }
-}
-
-fn create_temp_db_path(prefix: &str) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic")
-        .as_nanos();
-    std::env::temp_dir().join(format!("openticker-runtime-{prefix}-{timestamp}.db"))
 }

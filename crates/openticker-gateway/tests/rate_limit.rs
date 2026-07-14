@@ -4,24 +4,15 @@
 //! gateway must throttle the account until the ban window passes instead of
 //! hammering the provider with further requests.
 
-use openticker_config::AccountConfig;
-use openticker_core::{ExecutionMode, Timeframe};
+mod common;
+
+use common::{binance_demo_account, unix_now_ms};
+use openticker_core::Timeframe;
 use openticker_gateway::{Gateway, GatewayError, build_connector_registry};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn unix_now_ms() -> i64 {
-    i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after epoch")
-            .as_millis(),
-    )
-    .expect("timestamp should fit in i64")
-}
 
 /// Starts a minimal HTTP server that answers every request with a Binance
 /// `-1003` IP-ban payload (HTTP 418), reporting the ban expiry `banned_until_ms`.
@@ -65,21 +56,8 @@ fn spawn_banning_server(banned_until_ms: i64) -> (String, Arc<AtomicUsize>) {
 
 fn banning_gateway(banned_until_ms: i64) -> (Gateway, Arc<AtomicUsize>) {
     let (base_url, hits) = spawn_banning_server(banned_until_ms);
-    let registry = build_connector_registry(&[AccountConfig {
-        id: "binance-demo".to_owned(),
-        kind: "binance".to_owned(),
-        mode: ExecutionMode::Paper,
-        api_key_env: Some("PATH".to_owned()),
-        api_secret_env: Some("PATH".to_owned()),
-        passphrase_env: None,
-        use_demo_mode: true,
-        reconciliation_remote_snapshot: true,
-        execution_remote_submission: None,
-        reconciliation_base_url: Some(base_url),
-        cash_balance_assets: Vec::new(),
-        total_budget_usd: 10_000.0,
-    }])
-    .expect("registry should build");
+    let registry =
+        build_connector_registry(&[binance_demo_account(base_url)]).expect("registry should build");
     (Gateway::new(Arc::new(Mutex::new(registry))), hits)
 }
 
@@ -128,21 +106,8 @@ fn rate_limited_response_throttles_account_and_gates_further_fetches() {
 #[test]
 fn expired_throttle_window_allows_fetches_again() {
     let (base_url, hits) = spawn_banning_server(unix_now_ms() + 60_000);
-    let registry = build_connector_registry(&[AccountConfig {
-        id: "binance-demo".to_owned(),
-        kind: "binance".to_owned(),
-        mode: ExecutionMode::Paper,
-        api_key_env: Some("PATH".to_owned()),
-        api_secret_env: Some("PATH".to_owned()),
-        passphrase_env: None,
-        use_demo_mode: true,
-        reconciliation_remote_snapshot: true,
-        execution_remote_submission: None,
-        reconciliation_base_url: Some(base_url),
-        cash_balance_assets: Vec::new(),
-        total_budget_usd: 10_000.0,
-    }])
-    .expect("registry should build");
+    let registry =
+        build_connector_registry(&[binance_demo_account(base_url)]).expect("registry should build");
 
     // Simulate a throttle window that has already expired.
     registry

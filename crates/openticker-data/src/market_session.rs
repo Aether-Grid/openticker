@@ -58,7 +58,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use openticker_core::MarketType;
 
-    use crate::market_session::{MarketSession, market_session_for};
+    use super::{MarketSession, market_session_for};
 
     #[test]
     fn classifies_market_sessions() {

@@ -18,10 +18,10 @@ The crate is split into:
   Shared connector domain types, contracts, and error surface.
 - `src/capabilities.rs`, `src/helpers.rs`, `src/stub.rs`, `src/registry.rs`
   Capability metadata, shared utility helpers, stub connector behavior, and registry orchestration.
-- `src/connectors/alpaca.rs`
-  Alpaca adapter implementation.
-- `src/connectors/binance.rs`
-  Binance adapter implementation.
+- `src/connectors/alpaca/`
+  Alpaca connector, REST decoding, account/bar/order normalization, and tests.
+- `src/connectors/binance/`
+  Binance connector, signing, REST and stream decoding, snapshot/kline/order normalization, and tests.
 
 The registry is account-centric, not connector-kind-centric. Each configured account gets one registry entry and one concrete connector client.
 
@@ -70,7 +70,7 @@ This metadata describes roles, paper/live/demo support, reconnect policy, thrott
 
 - Adding a new connector currently requires touching both this crate and `openticker-config`, because connector capability knowledge is duplicated.
 - `connector_matrix()` is the public capability summary, but runtime wiring still depends on explicit construction branches in `ConnectorRegistry::from_accounts`.
-- Adapter files are now grouped under `src/connectors/`, but each adapter remains implementation-heavy and may still need deeper internal splits.
+- Each venue adapter is split by responsibility under `src/connectors/alpaca/` and `src/connectors/binance/`.
 
 ## Verify
 

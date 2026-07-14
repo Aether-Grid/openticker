@@ -12,8 +12,6 @@ use crate::cli::Cli;
 use crate::commands::dispatch_command;
 use crate::tracing_setup::init_tracing;
 
-pub(crate) use crate::cli::DashboardOptions;
-
 #[tokio::main]
 async fn main() {
     init_tracing();

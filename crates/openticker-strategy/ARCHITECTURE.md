@@ -46,7 +46,9 @@ The crate is split into focused modules.
 | `src/single_indicator.rs` | `SingleIndicatorLongOnlyStrategy` behavior |
 | `src/consensus.rs` | `ConsensusLongOnlyStrategy` behavior |
 | `src/metadata.rs` | Shared metadata gating helpers |
-| `src/tests.rs` | Unit tests |
+| `src/tests/mod.rs` | Shared unit-test fixtures and test module wiring |
+| `src/tests/single_indicator.rs` | Single-indicator strategy unit tests |
+| `src/tests/consensus.rs` | Consensus strategy unit tests |
 
 Logical sections:
 

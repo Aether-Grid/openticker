@@ -17,7 +17,7 @@ reconciliation read models.
 ## Package And Commands
 
 - Cargo package: `openticker-portfolio`
-- Main file: `src/lib.rs`
+- Main file: `src/lib.rs` (re-exports only; implementation lives in focused modules under `src/`)
 - Verify: `cargo test -p openticker-portfolio`
 
 ## Current Working Shape

@@ -1,4 +1,5 @@
 use crate::id::CycleTriggerKind;
+use crate::summary::CycleRiskDecisionLabel;
 use openticker_core::{IndicatorSignal, SignalMetadata, SignalPhase, TradeIntent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,7 +52,7 @@ pub struct StaleDataDiagnostics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RiskStep {
     pub intent: TradeIntent,
-    pub decision: crate::CycleRiskDecisionLabel,
+    pub decision: CycleRiskDecisionLabel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub stale_data: bool,

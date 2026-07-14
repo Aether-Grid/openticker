@@ -13,11 +13,14 @@ Configuration loading, validation, and effective-config rendering for the OpenTi
 The crate is split by concern:
 
 - `src/lib.rs` wires modules and re-exports the public surface
-- `src/model.rs` defines schema and effective-config model types
+- `src/model.rs` defines the loaded configuration schema
+- `src/effective.rs` owns the secret-safe effective-config projection
 - `src/loading.rs` owns `.env` resolution, directory traversal, and TOML loading
-- `src/validation.rs` owns semantic validation and effective-config projection
+- `src/sources.rs` maps parsed entities back to their source files
+- `src/writing.rs` preserves TOML document structure while rendering updates and writing atomically
+- `src/validation/` splits semantic validation by account, instance, indicator, connector, and global rules
 - `src/error.rs` defines `ConfigError`
-- `src/tests.rs` contains crate-level tests
+- `src/tests/` contains focused loading, validation, source, and writing tests
 
 The main layers are still the same:
 
@@ -80,7 +83,7 @@ The current validator checks:
 ## Refactor Notes
 
 - Connector capability metadata is duplicated across the workspace and is a likely future cleanup point.
-- Validation logic is now centralized in `src/validation.rs`; splitting validator helpers into submodules is still a likely next step if rule count keeps growing.
+- Validation remains centralized behind `ConfigBundle::validate`, with rule families split under `src/validation/`.
 - Adding a new config field usually requires changes in schema, validation, examples under `config/`, and often runtime wiring.
 
 ## Expected On-Disk Layout

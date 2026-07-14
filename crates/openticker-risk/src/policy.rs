@@ -1,6 +1,6 @@
 use openticker_core::TradeIntent;
 
-use crate::{RiskContext, RiskDecision, RiskLimits};
+use crate::types::{RiskContext, RiskDecision, RiskLimits};
 
 pub trait RiskPolicy {
     fn evaluate(&self, context: RiskContext) -> RiskDecision;

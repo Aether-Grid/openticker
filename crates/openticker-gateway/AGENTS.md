@@ -17,7 +17,8 @@ operations.
 ## Package And Commands
 
 - Cargo package: `openticker-gateway`
-- Main file: `src/lib.rs`
+- Main file: `src/lib.rs` (module index; implementation lives in `src/gateway.rs`,
+  `src/error.rs`, `src/registry.rs`, and `src/constraints.rs`)
 - Verify: `cargo test -p openticker-gateway`
 
 ## Current Working Shape
@@ -42,7 +43,7 @@ operations.
 
 ### Add a new connector operation
 
-1. Add the gateway method in `src/lib.rs`.
+1. Add the gateway method in `src/gateway.rs`.
 2. Decide whether readiness-gating is required for the operation.
 3. Map connector errors into `GatewayError` variants consistently.
 4. Update runtime call sites in `crates/openticker-runtime/src/connector_gateway.rs`.

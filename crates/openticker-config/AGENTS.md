@@ -15,11 +15,12 @@ This directory contains the config schema and validation layer. Changes here aff
 ## Current Working Shape
 
 - Public API is re-exported from `src/lib.rs`.
-- Schema and bundle model types live in `src/model.rs`.
+- Schema and bundle model types live in `src/model.rs`; effective-config projection types live in `src/effective.rs`.
 - Loading and TOML parsing helpers live in `src/loading.rs`.
-- Semantic validation and `effective_config` rendering live in `src/validation.rs`.
+- Semantic validation lives in focused modules under `src/validation/`.
+- Source-file mapping and round-trip writes live in `src/sources.rs` and `src/writing.rs`.
 - Error types live in `src/error.rs`.
-- Crate tests live in `src/tests.rs`.
+- Crate tests live under `src/tests/`.
 - `load_from_dir` is the main entry point.
 - Bot config files are loaded from `global.service.bot_dir`, which defaults to `bots/`.
 - Validation depends on local connector capability tables and `openticker_registry::indicator_manifest`.
@@ -44,7 +45,7 @@ This directory contains the config schema and validation layer. Changes here aff
 
 ### Add a new connector kind
 
-1. Update the local connector capability table in this crate.
+1. Update the local connector capability table in `src/validation/connectors.rs`.
 2. Update validation for required secrets, roles, and market support.
 3. Coordinate matching changes in `openticker-connectors`.
 

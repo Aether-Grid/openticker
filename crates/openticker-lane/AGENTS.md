@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last reviewed: 2026-04-21
+Last reviewed: 2026-07-14
 
 ## Overview
 
@@ -29,7 +29,9 @@ It should stay focused on:
 ## Package And Commands
 
 - Cargo package: `openticker-lane`
-- Main file: `src/lib.rs`
+- Public facade: `src/lib.rs`
+- Implementation modules: `src/{build,cycle,execution,manual_ops,polling,position,reconcile,recovery,signals,state,trace,warmup}.rs`
+- Unit tests: `src/tests.rs`
 - Verify: `cargo test -p openticker-lane`
 
 ## Invariants

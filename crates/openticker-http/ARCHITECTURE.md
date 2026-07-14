@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-Last reviewed: 2026-04-19
+Last reviewed: 2026-07-14
 
 ## Role
 
@@ -41,9 +41,9 @@ Important public items:
 
 Important internal entrypoints:
 
-- `config_reload_handler(...)` in `src/handlers.rs`
-- instance lifecycle handlers in `src/handlers.rs`
-- metrics and status handlers in `src/handlers.rs`
+- `config_reload_handler(...)` in `src/handlers/config.rs`
+- instance lifecycle handlers in `src/handlers/bot_actions.rs`
+- metrics and status handlers in `src/handlers/platform.rs`
 
 ## Internal Layout
 
@@ -51,12 +51,17 @@ The crate is now split into focused modules.
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | crate root re-exports and HTTP tests |
-| `src/constants.rs` | route constants, OpenAPI route descriptors, OpenAPI generation, shared constants |
+| `src/lib.rs` | small crate root and public re-exports |
+| `src/constants.rs` | route paths, embedded assets, limits, and timeouts |
+| `src/openapi.rs` | OpenAPI route descriptors and document generation |
 | `src/state.rs` | `HttpState` and HTTP-facing response/projection structs |
 | `src/router.rs` | `build_router(...)` and route registration |
 | `src/runtime.rs` | `load_http_state(...)`, `serve(...)`, and runtime-owned polling supervisor wiring |
-| `src/handlers.rs` | endpoint handlers plus handler-level helper logic |
+| `src/handlers/` | endpoint-domain handlers plus shared transport helpers |
+| `src/config_ops.rs` | reload validation, apply coordination, and reload status/history |
+| `src/config_watcher.rs` | debounced on-disk config monitoring |
+| `src/config_write_handlers.rs` | validated managed-config mutations |
+| `src/tests/` | domain-grouped in-process router tests |
 | `static/dist/index.html` | embedded dashboard frontend served at `/` and `/dashboard` |
 
 ## Direct Dependency Wiring
@@ -109,10 +114,12 @@ Current runtime-owned polling flow is:
 
 ## Current Implementation Realities
 
-- The crate is modularized, but `src/handlers.rs` is still large and spans multiple endpoint domains.
+- Endpoint handlers are split by domain; `handlers/mod.rs` owns only shared response, error, query-limit, and blocking-query helpers.
 - Polling ownership now lives in `openticker-runtime`; this crate only starts
   and stops the runtime-owned supervisor.
 - OpenAPI is generated from a handwritten route table rather than typed schema derivation.
+- Managed config has separate reload/apply, filesystem-watcher, and write-endpoint layers.
+- Bearer authentication is optional and configured at startup through `OPENTICKER_API_TOKEN`.
 - `HttpState` owns both the runtime lock and the dataplane object.
 - Some HTTP response shapes are thin wrappers over runtime DTOs, while others are HTTP-specific projections.
 

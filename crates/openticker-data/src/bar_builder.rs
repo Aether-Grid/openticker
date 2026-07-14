@@ -137,9 +137,8 @@ mod tests {
     use chrono::{DateTime, Utc};
     use openticker_core::{SignalPhase, Timeframe};
 
-    use crate::bar_builder::BarBuilder;
-    use crate::error::DataError;
-    use crate::normalized::NormalizedTrade;
+    use super::BarBuilder;
+    use crate::{DataError, NormalizedTrade};
 
     fn assert_float_eq(left: f64, right: f64) {
         assert!((left - right).abs() < 1e-9, "left={left}, right={right}");

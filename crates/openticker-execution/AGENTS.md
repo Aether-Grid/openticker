@@ -10,7 +10,7 @@ This crate defines the workspace's venue-neutral execution request and acceptanc
 
 - Cargo package: `openticker-execution`
 - Crate entry (public re-exports): `src/lib.rs`
-- Implementation modules: `src/types.rs`, `src/error.rs`, `src/helpers.rs`, `src/router.rs`
+- Implementation modules: `src/types.rs`, `src/error.rs`, `src/intent.rs`, `src/sizing.rs`, `src/router.rs`
 - Verify: `cargo test -p openticker-execution`
 
 ## Current Working Shape
@@ -18,7 +18,7 @@ This crate defines the workspace's venue-neutral execution request and acceptanc
 - Only market orders are modeled.
 - `PaperExecutionRouter` is the only concrete router here.
 - `stable_client_order_id` and `order_side_for_intent` are important shared helpers.
-- Unit tests are split between helper logic (`src/helpers.rs`) and router behavior (`src/router.rs`).
+- Unit tests are split between intent helpers (`src/intent.rs`), sizing (`src/sizing.rs`), and router behavior (`src/router.rs`).
 
 ## Invariants
 

@@ -9,7 +9,7 @@ This directory is the venue-integration boundary for the workspace. Everything h
 ## Package And Commands
 
 - Cargo package: `openticker-connectors`
-- Main files: `src/lib.rs`, `src/registry.rs`, `src/connectors/alpaca.rs`, `src/connectors/binance.rs`
+- Main files: `src/lib.rs`, `src/registry.rs`, `src/connectors/alpaca/`, `src/connectors/binance/`
 - Verify: `cargo test -p openticker-connectors`
 
 ## Current Working Shape

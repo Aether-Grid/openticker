@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-Last reviewed: 2026-04-21
+Last reviewed: 2026-07-14
 
 ## Role
 
@@ -71,6 +71,15 @@ Important public helpers:
 - `resolved_strategy_signal(...)`
 - `build_process_bar_evaluation(...)`
 - `market_data_is_stale(...)`
+
+## Internal Layout
+
+`src/lib.rs` preserves the crate-root API through re-exports. State and
+construction live in `state.rs` and `build.rs`; pure signal and position work
+lives in `signals.rs` and `position.rs`; lifecycle workflows are separated into
+`cycle.rs`, `manual_ops.rs`, `warmup.rs`, `recovery.rs`, `polling.rs`, and
+`execution.rs`; trace assembly and reconciliation DTOs live in `trace.rs` and
+`reconcile.rs`.
 
 ## Boundaries
 

@@ -9,7 +9,7 @@ This directory contains the operator-facing CLI and Ratatui dashboard. The crate
 ## Package And Commands
 
 - Cargo package: `openticker-cli`
-- Main files: `src/main.rs`, `src/cli.rs`, `src/api.rs`, `src/tracing_setup.rs`, `src/commands/*`, `src/dashboard.rs`
+- Main files: `src/main.rs`, `src/cli.rs`, `src/api.rs`, `src/tracing_setup.rs`, `src/commands/*`, `src/dashboard/*`
 - Verify: `cargo test -p openticker-cli`
 - Manual checks:
   - `cargo run -p openticker-cli -- validate-config --config-dir config`
@@ -21,7 +21,7 @@ This directory contains the operator-facing CLI and Ratatui dashboard. The crate
 - `src/cli.rs` owns Clap enums and option structs.
 - `src/commands/*` owns command handlers split by concern (`config`, `service`, `risk`, `instance`).
 - `src/api.rs` owns generic HTTP request and JSON-print helpers used by command mode.
-- `src/dashboard.rs` owns snapshot fetching, terminal rendering, and keyboard-bound instance operations.
+- `src/dashboard/` owns snapshot fetching (`client.rs`), terminal rendering (`ui.rs`), and keyboard-bound instance operations (`input.rs`, `app.rs`).
 - The crate depends on `openticker-http` for service startup and API contracts.
 
 ## Invariants
@@ -42,7 +42,7 @@ This directory contains the operator-facing CLI and Ratatui dashboard. The crate
 ### Add a new dashboard action or pane
 
 1. Extend `DashboardSnapshot` and `fetch_snapshot`.
-2. Add the rendering logic in `src/dashboard.rs`.
+2. Add the rendering logic in `src/dashboard/ui.rs`.
 3. Wire the key binding through the input loop and `BotOperation` or a new explicit action.
 4. Confirm the related endpoint exists and returns stable JSON.
 

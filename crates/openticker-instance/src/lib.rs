@@ -4,7 +4,7 @@ use openticker_core::{
     IndicatorSignalPolicy, OhlcvBar, SignalMetadata, SignalPhase,
 };
 use openticker_registry::{build_engine, indicator_manifest};
-use openticker_signals::{IndicatorEngine, log_indicator_evaluation};
+use openticker_signals::{IndicatorEngine, IndicatorEvaluation, log_indicator_evaluation};
 use openticker_strategy::{ConsensusLongOnlyStrategy, SingleIndicatorLongOnlyStrategy};
 use thiserror::Error;
 
@@ -45,20 +45,6 @@ pub enum RuntimeStrategyEngine {
 
 fn invalid_configuration(message: impl Into<String>) -> InstanceError {
     InstanceError::InvalidConfiguration(message.into())
-}
-
-fn evaluate_indicator_engine(
-    engine: &mut dyn IndicatorEngine,
-    bar: &OhlcvBar,
-    phase: SignalPhase,
-) -> openticker_signals::IndicatorEvaluation {
-    match phase {
-        SignalPhase::Preview => {
-            let mut preview_engine = engine.clone_engine();
-            preview_engine.evaluate(bar, phase)
-        }
-        SignalPhase::Confirmed => engine.evaluate(bar, phase),
-    }
 }
 
 /// Computes the warmup bar target for an instance based on enabled indicators.
@@ -145,6 +131,18 @@ pub fn build_runtime_indicators(
     Ok(indicators)
 }
 
+fn build_runtime_indicator_engine(
+    instance_id: &str,
+    indicator: &IndicatorInstanceConfig,
+) -> Result<Box<dyn IndicatorEngine>, InstanceError> {
+    build_engine(&indicator.indicator_type, &indicator.params).map_err(|error| {
+        invalid_configuration(format!(
+            "instance `{instance_id}` indicator `{}`: {error}",
+            indicator.id
+        ))
+    })
+}
+
 /// Builds the runtime strategy engine configured for an instance.
 ///
 /// # Errors
@@ -166,18 +164,6 @@ pub fn build_runtime_strategy(
             instance.id
         ))),
     }
-}
-
-fn build_runtime_indicator_engine(
-    instance_id: &str,
-    indicator: &IndicatorInstanceConfig,
-) -> Result<Box<dyn IndicatorEngine>, InstanceError> {
-    build_engine(&indicator.indicator_type, &indicator.params).map_err(|error| {
-        invalid_configuration(format!(
-            "instance `{instance_id}` indicator `{}`: {error}",
-            indicator.id
-        ))
-    })
 }
 
 #[must_use]
@@ -210,6 +196,20 @@ pub fn evaluate_indicator_signals(
             }
         })
         .collect::<Vec<_>>()
+}
+
+fn evaluate_indicator_engine(
+    engine: &mut dyn IndicatorEngine,
+    bar: &OhlcvBar,
+    phase: SignalPhase,
+) -> IndicatorEvaluation {
+    match phase {
+        SignalPhase::Preview => {
+            let mut preview_engine = engine.clone_engine();
+            preview_engine.evaluate(bar, phase)
+        }
+        SignalPhase::Confirmed => engine.evaluate(bar, phase),
+    }
 }
 
 #[must_use]
