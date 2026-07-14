@@ -22,8 +22,12 @@ openticker-core = { path = "../openticker-core" }
 openticker-dataplane = { path = "../openticker-dataplane" }
 openticker-data = { path = "../openticker-data" }
 openticker-runtime = { path = "../openticker-runtime" }
+notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Already in the dependency tree (via digest/rustls); used for constant-time
+# bearer-token comparison.
+subtle = "2.6"
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true

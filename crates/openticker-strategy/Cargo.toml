@@ -9,3 +9,4 @@ workspace = true
 
 [dependencies]
 openticker-core = { path = "../openticker-core" }
+thiserror.workspace = true

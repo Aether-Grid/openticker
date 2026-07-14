@@ -126,3 +126,174 @@ pub(crate) fn unix_now_ms() -> i64 {
         .unwrap_or_default();
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
+
+/// Maximum number of characters retained from a symbol when it is embedded in
+/// an error message. Exchange symbols are short (typically <=20 chars); this
+/// bound keeps oversized or hostile inputs from polluting logs.
+pub(crate) const MAX_ERROR_SYMBOL_LEN: usize = 32;
+
+/// Sanitizes a symbol for safe inclusion in error text and logs.
+///
+/// Control characters (including newlines, which could be used to forge log
+/// lines) are replaced with `?`, and the result is truncated to
+/// [`MAX_ERROR_SYMBOL_LEN`] characters with an ellipsis appended when the input
+/// was longer. The original symbol is never mutated; this only affects the
+/// string used in diagnostics.
+#[must_use]
+pub(crate) fn sanitize_symbol_for_error(symbol: &str) -> String {
+    let mut sanitized: String = symbol
+        .chars()
+        .take(MAX_ERROR_SYMBOL_LEN)
+        .map(|character| {
+            if character.is_control() {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect();
+    if symbol.chars().nth(MAX_ERROR_SYMBOL_LEN).is_some() {
+        sanitized.push('…');
+    }
+    sanitized
+}
+
+/// Classifies an HTTP failure as a rate-limit error when the status code is
+/// 429 (too many requests) or 418 (provider IP ban, e.g. Binance `-1003`).
+///
+/// The retry window is derived from the provider's "banned until <unix-ms>"
+/// message when present, falling back to a `Retry-After` header in seconds.
+pub(crate) fn rate_limit_error(
+    kind: ConnectorKind,
+    status: reqwest::StatusCode,
+    retry_after_header: Option<&str>,
+    detail: String,
+) -> Option<ConnectorError> {
+    if !matches!(status.as_u16(), 418 | 429) {
+        return None;
+    }
+
+    let retry_after_ms = parse_banned_until_ms(&detail)
+        .and_then(|until_ms| u64::try_from(until_ms.saturating_sub(unix_now_ms())).ok())
+        .filter(|window_ms| *window_ms > 0)
+        .or_else(|| {
+            retry_after_header
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .map(|seconds| seconds.saturating_mul(1_000))
+        });
+
+    Some(ConnectorError::RateLimited {
+        kind,
+        retry_after_ms,
+        detail,
+    })
+}
+
+/// Returns the `Retry-After` header value of a blocking HTTP response, if any.
+pub(crate) fn retry_after_header(response: &reqwest::blocking::Response) -> Option<String> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn parse_banned_until_ms(detail: &str) -> Option<i64> {
+    let marker = "banned until ";
+    let start = detail.find(marker)? + marker.len();
+    let digits = detail[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    digits.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_ERROR_SYMBOL_LEN, sanitize_symbol_for_error};
+
+    /// A short, clean ASCII symbol must pass through completely unchanged.
+    #[test]
+    fn short_clean_symbol_passes_through_unchanged() {
+        let result = sanitize_symbol_for_error("BTCUSDT");
+        assert_eq!(result, "BTCUSDT");
+    }
+
+    /// A symbol whose length equals the limit exactly must not gain an ellipsis.
+    #[test]
+    fn symbol_at_exact_limit_no_ellipsis() {
+        let input = "A".repeat(MAX_ERROR_SYMBOL_LEN); // 32 chars
+        let result = sanitize_symbol_for_error(&input);
+        assert_eq!(result.chars().count(), MAX_ERROR_SYMBOL_LEN);
+        assert!(
+            !result.ends_with('…'),
+            "ellipsis must not appear when input fits exactly"
+        );
+        assert_eq!(result, input);
+    }
+
+    /// A multi-byte UTF-8 string (33 × 'é', each 2 bytes) must be truncated by
+    /// CHARACTER count (32 chars kept) without panicking on a byte boundary,
+    /// and an ellipsis must be appended because the input exceeds the limit.
+    #[test]
+    fn multibyte_utf8_truncated_at_char_boundary() {
+        let input = "é".repeat(MAX_ERROR_SYMBOL_LEN + 1); // 33 × 'é'
+        assert_eq!(
+            input.len(),
+            (MAX_ERROR_SYMBOL_LEN + 1) * 2,
+            "sanity: 66 bytes"
+        );
+
+        let result = sanitize_symbol_for_error(&input);
+
+        // Must have truncated to exactly MAX_ERROR_SYMBOL_LEN characters …
+        // … plus the trailing '…' ellipsis character.
+        let chars: Vec<char> = result.chars().collect();
+        assert_eq!(
+            chars.last().copied(),
+            Some('…'),
+            "ellipsis must be appended when input exceeds limit"
+        );
+        // The kept portion is 32 'é' chars.
+        let kept: String = chars[..chars.len() - 1].iter().collect();
+        assert_eq!(
+            kept.chars().count(),
+            MAX_ERROR_SYMBOL_LEN,
+            "exactly MAX_ERROR_SYMBOL_LEN characters must be kept before the ellipsis"
+        );
+        assert!(
+            kept.chars().all(|c| c == 'é'),
+            "kept characters must be 'é'"
+        );
+    }
+
+    /// Control characters (newline, carriage-return, tab) must be replaced with '?'.
+    #[test]
+    fn control_chars_replaced_with_question_mark() {
+        let result = sanitize_symbol_for_error("AB\nCD\rEF\t");
+        assert_eq!(result, "AB?CD?EF?");
+    }
+
+    /// A long string with embedded control chars is truncated AND has controls replaced.
+    #[test]
+    fn long_string_with_control_chars_truncated_and_sanitized() {
+        // Build a 40-char string where every 5th char is a newline.
+        let input: String = (0..40u32)
+            .map(|i| if i % 5 == 4 { '\n' } else { 'X' })
+            .collect();
+        let result = sanitize_symbol_for_error(&input);
+
+        // Must end with ellipsis (input is 40 chars > 32).
+        assert!(result.ends_with('…'), "ellipsis expected for 40-char input");
+
+        // The non-ellipsis portion must be 32 chars long.
+        let body: String = result.chars().take(MAX_ERROR_SYMBOL_LEN).collect();
+        assert_eq!(body.chars().count(), MAX_ERROR_SYMBOL_LEN);
+
+        // No raw control characters anywhere in the result.
+        assert!(
+            !result.chars().any(char::is_control),
+            "no control characters may survive sanitization"
+        );
+    }
+}

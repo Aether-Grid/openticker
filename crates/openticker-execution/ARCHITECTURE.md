@@ -47,7 +47,7 @@ The crate uses a thin public surface in `src/lib.rs` and module-focused implemen
 | `src/lib.rs` | Module wiring and public re-exports |
 | `src/types.rs` | Execution enums and request/response models |
 | `src/error.rs` | `ExecutionError` variants |
-| `src/helpers.rs` | Intent-to-side mapping, stable client-order ID helper, helper tests |
+| `src/intent.rs` | Intent-to-side mapping, stable client-order ID helper, helper tests |
 | `src/sizing.rs` | Order-quantity resolution, market rounding policy, and constraint handling |
 | `src/router.rs` | `ExecutionRouter` trait, `PaperExecutionRouter`, router tests |
 

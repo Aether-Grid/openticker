@@ -74,6 +74,14 @@ impl Default for DataPlaneConfig {
     }
 }
 
+const fn default_data_plane_polling_interval_ms() -> u64 {
+    5_000
+}
+
+const fn default_data_plane_retention() -> usize {
+    500
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataPlaneWatchlistEntry {
     pub account: String,
@@ -103,6 +111,89 @@ pub struct AccountConfig {
     #[serde(default)]
     pub cash_balance_assets: Vec<String>,
     pub total_budget_usd: f64,
+}
+
+impl AccountConfig {
+    #[must_use]
+    pub fn execution_remote_submission_enabled(&self) -> bool {
+        self.execution_remote_submission
+            .unwrap_or(self.reconciliation_remote_snapshot)
+    }
+}
+
+/// An API-facing account update payload: every [`AccountConfig`] field except
+/// `id` and the secret env references (`api_key_env`, `api_secret_env`,
+/// `passphrase_env`), which are immutable through the HTTP surface.
+///
+/// `deny_unknown_fields` makes any attempt to submit those excluded fields a
+/// deserialization error, so secret references can never be changed (or
+/// echoed back) through account update requests.
+///
+/// Editable matrix: although the payload carries the full non-secret field
+/// set, the HTTP write pipeline's change-set validation treats connector
+/// settings as restart-scoped. In practice only `total_budget_usd` and
+/// `cash_balance_assets` are hot-writable; a write that changes `kind`,
+/// `mode`, `use_demo_mode`, `reconciliation_remote_snapshot`,
+/// `reconciliation_base_url`, or `execution_remote_submission` is rejected
+/// with 409 `account_settings_changed`. This is the intended contract: the
+/// full field set keeps every write an explicit statement of the desired
+/// account rather than a sparse patch.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountConfigUpdate {
+    pub kind: String,
+    pub mode: ExecutionMode,
+    #[serde(default)]
+    pub use_demo_mode: bool,
+    #[serde(default)]
+    pub reconciliation_remote_snapshot: bool,
+    #[serde(default)]
+    pub execution_remote_submission: Option<bool>,
+    #[serde(default)]
+    pub reconciliation_base_url: Option<String>,
+    #[serde(default)]
+    pub cash_balance_assets: Vec<String>,
+    pub total_budget_usd: f64,
+}
+
+impl AccountConfigUpdate {
+    /// Builds a full [`AccountConfig`] from this update, copying the `id` and
+    /// the three secret env references from `existing` untouched.
+    #[must_use]
+    pub fn into_account(self, existing: &AccountConfig) -> AccountConfig {
+        // Resolve `execution_remote_submission` against the existing account.
+        //
+        // The dashboard reads the *resolved* bool from GET /v1/config/effective
+        // and echoes it back as `Some(bool)` on every save (it cannot reconstruct
+        // the original `Option`). If we stored that `Some(bool)` verbatim, a
+        // previously-inherited default (raw `None`) would be materialized into the
+        // account TOML as an explicit `execution_remote_submission = false/true`
+        // line — polluting the file and producing a spurious change-set diff.
+        //
+        // So: only adopt the incoming value when it actually changes the resolved
+        // effective value. Otherwise preserve the existing raw `Option` (keeping a
+        // `None` as `None`) so an inherited default stays inherited.
+        let execution_remote_submission = match self.execution_remote_submission {
+            Some(requested) if requested != existing.execution_remote_submission_enabled() => {
+                Some(requested)
+            }
+            _ => existing.execution_remote_submission,
+        };
+        AccountConfig {
+            id: existing.id.clone(),
+            kind: self.kind,
+            mode: self.mode,
+            api_key_env: existing.api_key_env.clone(),
+            api_secret_env: existing.api_secret_env.clone(),
+            passphrase_env: existing.passphrase_env.clone(),
+            use_demo_mode: self.use_demo_mode,
+            reconciliation_remote_snapshot: self.reconciliation_remote_snapshot,
+            execution_remote_submission,
+            reconciliation_base_url: self.reconciliation_base_url,
+            cash_balance_assets: self.cash_balance_assets,
+            total_budget_usd: self.total_budget_usd,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +238,14 @@ pub struct InstanceConfig {
     pub allow_live: bool,
 }
 
+const fn default_instance_polling_enabled() -> bool {
+    true
+}
+
+const fn default_instance_polling_interval_ms() -> u64 {
+    1_000
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetConfig {
     pub pct: f64,
@@ -157,22 +256,6 @@ pub struct ExecutionConstraintsConfig {
     pub quantity_step: Option<f64>,
     pub min_quantity: Option<f64>,
     pub min_notional_usd: Option<f64>,
-}
-
-const fn default_instance_polling_enabled() -> bool {
-    true
-}
-
-const fn default_instance_polling_interval_ms() -> u64 {
-    1_000
-}
-
-const fn default_data_plane_polling_interval_ms() -> u64 {
-    5_000
-}
-
-const fn default_data_plane_retention() -> usize {
-    500
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -201,6 +284,27 @@ pub struct IndicatorInstanceConfig {
     pub weight: Option<f64>,
     #[serde(default)]
     pub metadata_filters: IndicatorSignalMetadataFilters,
+    /// Raw, per-indicator parameter table copied verbatim from the TOML
+    /// `[indicators.params]` section.
+    ///
+    /// # Validation contract
+    ///
+    /// The only structural guarantee enforced here is that this is a TOML
+    /// table: the `toml::Table` type rejects any non-table value (e.g. a
+    /// scalar or array) at deserialization time, and a missing section
+    /// defaults to an empty table. The *shape and types of the keys are NOT
+    /// validated by [`ConfigBundle::validate`](crate::ConfigBundle::validate)*,
+    /// because the per-indicator parameter schemas live in the indicator crate
+    /// (behind the `indicators` feature) and are not available here without a
+    /// dependency cycle.
+    ///
+    /// Consumers MUST treat these params as untrusted input and validate them
+    /// before use. The canonical validation point is
+    /// `openticker_registry::build_engine`, whose per-indicator `build`
+    /// functions parse and range-check every key, returning an
+    /// `IndicatorBuildError` on any malformed value. Code that reads params
+    /// directly (rather than building an engine) must never assume a key is
+    /// present or has a particular type.
     #[serde(default)]
     pub params: toml::Table,
 }
@@ -230,42 +334,4 @@ pub struct ConfigBundle {
     pub accounts: Vec<AccountConfig>,
     pub risk_profiles: Vec<RiskProfileConfig>,
     pub instances: Vec<InstanceConfig>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EffectiveConfig {
-    pub global: GlobalConfig,
-    pub accounts: Vec<EffectiveAccountConfig>,
-    pub risk_profiles: Vec<RiskProfileConfig>,
-    #[serde(rename = "bots")]
-    pub instances: Vec<InstanceConfig>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EffectiveAccountConfig {
-    pub id: String,
-    pub kind: String,
-    pub mode: ExecutionMode,
-    pub use_demo_mode: bool,
-    pub reconciliation_remote_snapshot: bool,
-    pub execution_remote_submission: bool,
-    pub reconciliation_base_url: Option<String>,
-    pub cash_balance_assets: Vec<String>,
-    pub total_budget_usd: f64,
-    pub secret_status: AccountSecretStatus,
-}
-
-impl AccountConfig {
-    #[must_use]
-    pub fn execution_remote_submission_enabled(&self) -> bool {
-        self.execution_remote_submission
-            .unwrap_or(self.reconciliation_remote_snapshot)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AccountSecretStatus {
-    pub api_key_present: bool,
-    pub api_secret_present: bool,
-    pub passphrase_present: bool,
 }

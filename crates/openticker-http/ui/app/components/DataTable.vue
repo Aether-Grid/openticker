@@ -40,7 +40,7 @@ function cellValue(row: T, key: string): unknown {
           <tr
             v-for="(row, idx) in rows"
             :key="rowKey ? rowKey(row) : idx"
-            class="hairline-b last:border-b-0 hover:bg-[color:var(--color-accent-softer)] transition-colors cursor-default"
+            class="hairline-b last:border-b-0 hover:bg-[color:var(--color-accent-softer)] transition-colors cursor-pointer"
             @click="emit('rowClick', row)"
           >
             <td

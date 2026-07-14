@@ -16,7 +16,7 @@ use openticker_gateway::{
     execution_constraints_are_complete, resolve_effective_execution_constraints,
 };
 use openticker_ledger::{
-    AccountLedger, InventoryError, LedgerOwnerPath, ReservationError,
+    AccountLedger, InventoryError, LedgerError, LedgerOwnerPath, ReservationError,
     calculate_position_notional_usd,
 };
 pub use openticker_ledger::{

@@ -10,7 +10,7 @@ This crate is the runtime journal and persistence layer. It is the source of aud
 
 - Cargo package: `openticker-storage`
 - Entry file: `src/lib.rs`
-- Backend files: `src/in_memory_impl.rs`, `src/sqlite_impl.rs`
+- Backend files: `src/in_memory.rs`, `src/sqlite/`
 - Verify: `cargo test -p openticker-storage`
 
 ## Current Working Shape
@@ -19,7 +19,7 @@ This crate is the runtime journal and persistence layer. It is the source of aud
 - `OperatorReadModels` is the in-memory projected read side for operator queries.
 - `InMemoryRuntimeJournal` mirrors the trait with mutex-protected in-memory collections.
 - `SqliteRuntimeJournal` mirrors the same trait over one WAL-enabled write SQLite connection plus a small read-connection pool.
-- Record and write types live in `src/lib.rs`; backend implementations live in dedicated modules.
+- Record and write types live in `src/records.rs`; the journal trait lives in `src/journal.rs`.
 
 ## Invariants
 

@@ -61,11 +61,17 @@ The crate is implemented across small focused modules.
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | Record/write models, journal trait, shared helpers, error type |
-| `src/in_memory_impl.rs` | `RuntimeJournal` implementation for `InMemoryRuntimeJournal` |
-| `src/sqlite_impl.rs` | `RuntimeJournal` implementation for `SqliteRuntimeJournal` and SQLite-specific helpers |
-| `src/sqlite_migrations.rs` | Embedded SQLite schema initialization and schema-version enforcement |
-| `src/tests.rs` | Crate-level backend parity and migration tests |
+| `src/lib.rs` | Module tree and public re-exports |
+| `src/records.rs` | Persisted record and write models |
+| `src/journal.rs` | `RuntimeJournal` trait |
+| `src/error.rs` | `StorageError` |
+| `src/support.rs` | Shared mutex and clock helpers |
+| `src/in_memory.rs` | In-memory journal struct and `RuntimeJournal` implementation |
+| `src/sqlite/mod.rs` | SQLite journal struct and connection-pool management |
+| `src/sqlite/journal.rs` | SQLite `RuntimeJournal` implementation and pruning helpers |
+| `src/sqlite/migrations.rs` | Embedded schema initialization and schema-version enforcement |
+| `src/operator_read_models.rs` | Projected in-memory operator read models |
+| `src/tests/` | Backend unit tests and shared fixtures |
 
 Logical sections:
 
@@ -115,7 +121,7 @@ Its records are consumed indirectly by:
 ### SQLite backend
 
 - uses one WAL-enabled SQLite connection behind a mutex
-- delegates schema initialization and schema-version checks to `src/sqlite_migrations.rs`
+- delegates schema initialization and schema-version checks to `src/sqlite/migrations.rs`
 - mirrors the same trait contract as the in-memory backend
 
 ## Current Implementation Realities

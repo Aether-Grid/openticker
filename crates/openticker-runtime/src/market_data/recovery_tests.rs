@@ -1,4 +1,4 @@
-use super::super::recovery_engine::MAX_RECOVERY_NO_PROGRESS_CYCLES;
+use super::super::recovery_state::MAX_RECOVERY_NO_PROGRESS_CYCLES;
 use super::*;
 use crate::test_support::{fixture_bundle, fixture_bundle_with_timeframe, test_bar};
 use openticker_core::Timeframe;

@@ -1,4 +1,4 @@
-use super::gateway::{
+use super::pending_provider_events::{
     GatewayFetchFailure, PendingProviderEvent, append_pending_provider_events,
     gateway_fetch_latest_bar_with_events,
 };

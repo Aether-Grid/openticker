@@ -100,7 +100,7 @@ fn ensure_account_ready_records_disconnect_and_reconnect_bookkeeping() {
     let gateway = Gateway::new(Arc::clone(&registry));
 
     {
-        let mut guard = registry.lock().expect("registry lock should succeed");
+        let guard = registry.lock().expect("registry lock should succeed");
         guard
             .note_account_disconnect("alpaca-paper", 1_000)
             .expect("disconnect bookkeeping should succeed");
@@ -118,4 +118,54 @@ fn ensure_account_ready_records_disconnect_and_reconnect_bookkeeping() {
         .expect("alpaca-paper status should exist");
     assert_eq!(status.resilience_state.consecutive_failures, 0);
     assert!(status.resilience_state.next_reconnect_at_ms.is_none());
+}
+
+#[test]
+fn ensure_account_ready_disconnect_bookkeeping_reflects_fresh_state() {
+    // Covers the disconnect-bookkeeping path in `ensure_account_ready`: a
+    // not-ready account must record the disconnect and surface a reason derived
+    // from the *freshly recorded* resilience state, never a stale snapshot. The
+    // bookkeeping call is best-effort (its failure is logged, not propagated),
+    // so this asserts the success path keeps the reported state consistent.
+    let registry = Arc::new(Mutex::new(
+        ConnectorRegistry::from_accounts(vec![test_account(
+            "binance-paper",
+            ConnectorKind::Binance,
+            ExecutionMode::Paper,
+            false,
+        )])
+        .expect("test connector registry should build"),
+    ));
+    let gateway = Gateway::new(Arc::clone(&registry));
+
+    // First readiness check on a never-connected account records one failure.
+    let first = gateway.ensure_account_ready("binance-paper");
+    assert!(matches!(
+        first,
+        Err(GatewayError::ConnectorNotReady {
+            ref account_id,
+            state,
+            ref reason,
+        }) if account_id == "binance-paper"
+            && matches!(state, ConnectionState::Degraded)
+            && reason.contains("consecutive_failures=1")
+    ));
+
+    // A second check records another disconnect; the reason must reflect the
+    // updated count (=2), proving the post-bookkeeping status read is fresh and
+    // not the stale value captured before the disconnect was recorded.
+    let second = gateway.ensure_account_ready("binance-paper");
+    assert!(matches!(
+        second,
+        Err(GatewayError::ConnectorNotReady { ref reason, .. })
+            if reason.contains("consecutive_failures=2")
+    ));
+
+    let status = gateway
+        .statuses()
+        .expect("status lookup should succeed")
+        .into_iter()
+        .find(|status| status.account_id == "binance-paper")
+        .expect("binance-paper status should exist");
+    assert_eq!(status.resilience_state.consecutive_failures, 2);
 }

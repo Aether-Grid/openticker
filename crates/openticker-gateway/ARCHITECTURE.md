@@ -51,16 +51,12 @@ Important public helpers:
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | Gateway facade, error type, readiness helpers |
-
-Logical sections:
-
-1. gateway and error types
-2. connector-registry construction helper
-3. lock and readiness helpers
-4. status/readiness operations
-5. market-data operations
-6. execution operations
+| `src/lib.rs` | module index and public root re-exports |
+| `src/error.rs` | `GatewayError` and connector-error conversion |
+| `src/gateway.rs` | `Gateway` facade: lock and readiness helpers, rate-limit tracking, status/market-data/execution operations |
+| `src/registry.rs` | connector-registry construction helper |
+| `src/constraints.rs` | symbol-constraint normalization and resolution helpers |
+| `src/tests.rs` | unit tests |
 
 ## Direct Dependency Wiring
 

@@ -21,7 +21,9 @@ The crate is small and split into focused source modules.
 | `src/single_indicator.rs` | Single-indicator long-only implementation |
 | `src/consensus.rs` | Consensus long-only implementation |
 | `src/metadata.rs` | Shared metadata-filtering helpers |
-| `src/tests.rs` | Unit coverage for mapping and policy behavior |
+| `src/tests/mod.rs` | Shared unit-test fixtures and test module wiring |
+| `src/tests/single_indicator.rs` | Unit coverage for single-indicator mapping and policy behavior |
+| `src/tests/consensus.rs` | Unit coverage for consensus scoring, veto, threshold validation, and policy behavior |
 
 There are two strategy styles today:
 

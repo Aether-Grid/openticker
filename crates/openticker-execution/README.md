@@ -25,7 +25,8 @@ The public surface remains in `src/lib.rs`, and implementation is split into foc
 
 - `src/types.rs` for request/response and order enums
 - `src/error.rs` for `ExecutionError`
-- `src/helpers.rs` for deterministic helper functions and helper tests
+- `src/intent.rs` for intent mapping, deterministic client-order IDs, and their tests
+- `src/sizing.rs` for quantity resolution under market and venue constraints
 - `src/router.rs` for the router trait, paper router, and router tests
 
 ## How It Works

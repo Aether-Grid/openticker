@@ -1,44 +1,29 @@
 use crate::error::ConfigError;
-use crate::model::{AccountConfig, ConfigBundle, GlobalConfig, InstanceConfig, RiskProfileConfig};
-use serde::Deserialize;
-use std::fs;
+use crate::model::ConfigBundle;
+use crate::sources::load_sources_from_dir;
 use std::path::{Path, PathBuf};
 
-const GLOBAL_CONFIG_FILE: &str = "openticker.toml";
+pub(crate) const GLOBAL_CONFIG_FILE: &str = "openticker.toml";
 
 /// Loads all runtime configuration files from `config_dir` and validates the resulting bundle.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when required files cannot be read, TOML cannot be parsed,
-/// or validation fails.
+/// Returns [`ConfigError`] when an existing `.env` file cannot be read/parsed,
+/// when required files cannot be read, when TOML cannot be parsed, or when
+/// validation fails.
 pub fn load_from_dir(config_dir: impl AsRef<Path>) -> Result<ConfigBundle, ConfigError> {
     let config_dir = config_dir.as_ref();
-    load_dotenv(config_dir);
+    load_dotenv(config_dir)?;
 
-    let global_path = config_dir.join(GLOBAL_CONFIG_FILE);
-    let global: GlobalConfig = read_toml_file(&global_path)?;
-
-    let accounts_dir = config_dir.join("accounts");
-    let risk_dir = config_dir.join("risk");
-    let bots_dir = resolve_config_dir(config_dir, &global.service.bot_dir);
-
-    let accounts: Vec<AccountConfig> = read_toml_dir(&accounts_dir)?;
-    let risk_profiles: Vec<RiskProfileConfig> = read_toml_dir(&risk_dir)?;
-    let instances: Vec<InstanceConfig> = read_toml_dir(&bots_dir)?;
-
-    let bundle = ConfigBundle {
-        global,
-        accounts,
-        risk_profiles,
-        instances,
-    };
+    let sources = load_sources_from_dir(config_dir)?;
+    let bundle = sources.to_bundle();
     bundle.validate()?;
 
     Ok(bundle)
 }
 
-fn resolve_config_dir(config_dir: &Path, configured_dir: &Path) -> PathBuf {
+pub(crate) fn resolve_config_dir(config_dir: &Path, configured_dir: &Path) -> PathBuf {
     if configured_dir.is_absolute() {
         return configured_dir.to_path_buf();
     }
@@ -58,61 +43,69 @@ fn resolve_config_dir(config_dir: &Path, configured_dir: &Path) -> PathBuf {
     config_relative
 }
 
-fn load_dotenv(config_dir: &Path) {
+/// Loads environment variables from a `.env` file if one is present.
+///
+/// Resolution order: `<config_dir>/.env`, then `<config_dir>/../.env`, then a
+/// directory walk via [`dotenvy::dotenv`]. A `.env` file is optional, so a
+/// missing file (`NotFound`) is silently ignored. Any other failure (e.g. a
+/// permission error or a malformed line) is logged via `tracing::warn!` and
+/// propagated, because silently leaving secrets unset would hide the cause of
+/// downstream "required secret env var ... is not set" failures.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Dotenv`] when a `.env` file exists but cannot be read
+/// or parsed.
+pub(crate) fn load_dotenv(config_dir: &Path) -> Result<(), ConfigError> {
     let env_in_config_dir = config_dir.join(".env");
     if env_in_config_dir.is_file() {
-        let _ = dotenvy::from_path(&env_in_config_dir);
-        return;
+        return classify_dotenv_result(&env_in_config_dir, dotenvy::from_path(&env_in_config_dir));
     }
 
     if let Some(parent) = config_dir.parent() {
         let env_in_project_root = parent.join(".env");
         if env_in_project_root.is_file() {
-            let _ = dotenvy::from_path(&env_in_project_root);
-            return;
+            return classify_dotenv_result(
+                &env_in_project_root,
+                dotenvy::from_path(&env_in_project_root),
+            );
         }
     }
 
-    let _ = dotenvy::dotenv();
+    // No explicit `.env` next to the config; fall back to a directory walk.
+    // `dotenvy::dotenv` resolves the path it actually used, so report that on
+    // failure; a `NotFound` here simply means no `.env` exists anywhere.
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(err) if err.not_found() => Ok(()),
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to load `.env` discovered via directory walk");
+            Err(ConfigError::Dotenv {
+                path: PathBuf::from(".env"),
+                source: err,
+            })
+        }
+    }
 }
 
-fn read_toml_file<T>(path: &Path) -> Result<T, ConfigError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let raw = fs::read_to_string(path).map_err(|source| ConfigError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    toml::from_str(&raw).map_err(|source| ConfigError::Toml {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn read_toml_dir<T>(directory: &Path) -> Result<Vec<T>, ConfigError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let mut entries = fs::read_dir(directory)
-        .map_err(|source| ConfigError::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|source| ConfigError::Io {
-            path: directory.to_path_buf(),
-            source,
-        })?
-        .into_iter()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-        .collect::<Vec<_>>();
-
-    entries.sort();
-
-    entries
-        .into_iter()
-        .map(|path| read_toml_file::<T>(&path))
-        .collect()
+/// Classifies the outcome of loading a specific `.env` file.
+///
+/// A `NotFound` error is benign (the file is optional / may have been removed
+/// between the `is_file` check and the read). Any other error is logged and
+/// converted into a [`ConfigError::Dotenv`] so the caller can surface it.
+pub(crate) fn classify_dotenv_result(
+    path: &Path,
+    result: Result<(), dotenvy::Error>,
+) -> Result<(), ConfigError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) if err.not_found() => Ok(()),
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "failed to load `.env` file");
+            Err(ConfigError::Dotenv {
+                path: path.to_path_buf(),
+                source: err,
+            })
+        }
+    }
 }

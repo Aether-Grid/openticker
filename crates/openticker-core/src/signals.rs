@@ -66,8 +66,25 @@ impl From<i8> for IndicatorFactValue {
     }
 }
 
+/// Converts a `usize` count/length into an integer fact.
+///
+/// The conversion is exact for all realistic indicator values. Values above
+/// `i64::MAX` (~9.2e18) saturate to `i64::MAX`; this boundary is unreachable
+/// for indicator facts (counts, periods, and window lengths), and a
+/// `debug_assert!` guards against it in debug builds.
 impl From<usize> for IndicatorFactValue {
     fn from(value: usize) -> Self {
+        // Indicator facts carry small counts/lengths/periods (pattern counts,
+        // moving-average windows, etc.), so this conversion is exact for every
+        // realistic value: `usize` only exceeds `i64::MAX` (~9.2e18) on
+        // 64-bit-and-wider platforms with absurd magnitudes that no indicator
+        // produces. Such an out-of-range value saturates to `i64::MAX` rather
+        // than wrapping or panicking; the `debug_assert!` flags it in debug
+        // builds so a real overflow is caught during testing.
+        debug_assert!(
+            i64::try_from(value).is_ok(),
+            "IndicatorFactValue::from(usize) saturated: {value} exceeds i64::MAX",
+        );
         Self::Int(i64::try_from(value).unwrap_or(i64::MAX))
     }
 }

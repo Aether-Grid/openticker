@@ -1,4 +1,5 @@
-use crate::{BasicRiskPolicy, RiskContext, RiskDecision, RiskLimits, RiskPolicy};
+use crate::policy::{BasicRiskPolicy, RiskPolicy};
+use crate::types::{RiskContext, RiskDecision, RiskLimits};
 use openticker_core::TradeIntent;
 
 fn sample_limits() -> RiskLimits {

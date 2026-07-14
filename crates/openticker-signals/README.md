@@ -10,8 +10,9 @@ Indicator contracts, manifests, and built-in signal implementations for OpenTick
 
 ## Current Architecture
 
-- `src/lib.rs`: public re-exports for the indicator contract, built-in manifests, and descriptor types
-- `src/common.rs`: shared math and series-building helpers such as EMA, SMA, Wilder RMA, ATR, RSI, Supertrend, crossover, and crossunder
+- `src/lib.rs`: module wiring and public re-exports for the indicator contract, built-in manifests, and descriptor types
+- `src/engine.rs`: the object-safe indicator contract (`IndicatorEngine`, `SignalSnapshot`) and evaluation/build/descriptor types
+- `src/common/`: shared math and series-building helpers (rolling stats in `rolling.rs`, crossover/crossunder in `crossings.rs`, TOML param parsing in `params.rs`)
 - `src/manifest.rs`: built-in manifest helpers derived from the built-in descriptor registry
 - `src/registry.rs`: built-in indicator descriptor helpers
 - `src/indicators/mod.rs`: built-in indicator module declarations
@@ -24,7 +25,7 @@ Indicator contracts, manifests, and built-in signal implementations for OpenTick
 
 ## Current State
 
-- Shared math helpers live in `common.rs`.
+- Shared math helpers live in `src/common/`.
 - Runtime construction now happens through `openticker-registry`.
 - The built-in manifest is descriptor-backed, so built-in metadata and built-in construction stay in one place.
 - Coverage currently focuses on deterministic unit tests for the built-in indicators plus manifest contract tests.

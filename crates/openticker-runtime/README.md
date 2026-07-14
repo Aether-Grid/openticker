@@ -1,6 +1,6 @@
 # openticker-runtime
 
-Last reviewed: 2026-04-18
+Last reviewed: 2026-07-14
 
 Runtime composition root for OpenTicker.
 
@@ -59,15 +59,18 @@ Current `src/` layout:
   Behavior-grouped `Runtime` impl blocks.
 - `src/processing/`
   Signal-to-intent pipeline split into `pipeline`, `cycle`, `planner`,
-  `constraints`, `executor`, `executor_engine`, `journal`, and risk rollup
-  sections. The code-heavy entrypoint modules now keep their focused runtime
+  `constraints`, `executor`, `executor_engine`, and gateway sections. Daily
+  loss rollover is co-located with the cycle adapter. The code-heavy entrypoint modules keep their focused runtime
   logic while larger scenario tests live in sibling `*_tests.rs` files.
 - `src/market_data/`
   Trade ingestion, stream payload processing, poll/dispatch, and warmup
   orchestration split by concern, including connector-facing market-data
-  adapter methods, the runtime-side recovery and warmup adapters in
-  `recovery_engine.rs` and `warmup_engine.rs`, and shared poll-target/bar-fetch
-  helpers.
+  adapter methods, lock-free pending-provider-event fetches, separate recovery
+  planning and recovery-state modules, the warmup adapter, and shared
+  poll-target/bar-fetch helpers.
+- `src/polling_supervisor/`
+  Runtime-owned supervisor lifecycle with separate due-stream polling and
+  preview-stream worker loops.
 - `src/reconciliation/`
   Reconciliation orchestration split into assessment, connector snapshot, and
   apply paths with scenario-grouped tests.
@@ -79,8 +82,8 @@ Current `src/` layout:
   Shared runtime adapter skeleton over `openticker-gateway`, with common
   account-kind validation, readiness checks, and runtime error translation.
 - `src/repo/`
-  Runtime-owned journal, bootstrap, ledger, and provider-event helper layer
-  used by the thinner connector and portfolio adapters.
+  Runtime-owned journal writes, journal reads, bootstrap, ledger, and
+  provider-event helper layer used by the thinner connector and portfolio adapters.
 - `src/shared/`
   Shared runtime helpers for labels, budget math, connector/status mapping,
   symbols, inventory syncing, observability, and event logging.
@@ -142,8 +145,9 @@ The runtime supports both:
 - polled bar fetches, using due-poll extraction and completion methods
 - stream payload ingestion via `process_market_stream_payload`
 
-Background polling orchestration currently lives in `openticker-http`, while
-runtime owns due-poll bookkeeping and dispatch completion.
+Background polling orchestration is owned by `RuntimePollingSupervisor` under
+`src/polling_supervisor/`; `openticker-http` starts and shuts down that runtime
+service boundary.
 
 `src/market_data/recovery.rs` is now a runtime adapter over a lane-owned polling
 and recovery algorithm, with runtime still owning connector fetches, replay,
@@ -244,9 +248,10 @@ Lifecycle safety is enforced here:
 
 Integration coverage currently includes:
 
-- `tests/stock_paper_end_to_end.rs`
-- `tests/stock_reconciliation_restart.rs`
-- `tests/crypto_kline_ingestion.rs`
+- stock and crypto processing, restart/idempotency, reconciliation, ledger
+  exceptions, live balance caps, duplicate-submission protection, and
+  no-I/O-under-lock polling scenarios
+- shared mock HTTP and temporary-database plumbing in `tests/common/mod.rs`
 
 ## Verify
 

@@ -6,8 +6,31 @@ export default defineAppConfig({
     },
     button: {
       slots: {
-        base: 'rounded-md font-medium tracking-tight',
+        base: 'cursor-pointer rounded-md font-medium tracking-tight disabled:cursor-not-allowed aria-disabled:cursor-not-allowed',
         leadingIcon: 'shrink-0'
+      }
+    },
+    dropdownMenu: {
+      slots: {
+        item: 'cursor-pointer data-disabled:cursor-not-allowed'
+      }
+    },
+    navigationMenu: {
+      slots: {
+        link: 'cursor-pointer',
+        childLink: 'cursor-pointer'
+      }
+    },
+    select: {
+      slots: {
+        base: 'cursor-pointer disabled:cursor-not-allowed',
+        item: 'cursor-pointer data-disabled:cursor-not-allowed'
+      }
+    },
+    selectMenu: {
+      slots: {
+        base: 'cursor-pointer disabled:cursor-not-allowed',
+        item: 'cursor-pointer data-disabled:cursor-not-allowed'
       }
     },
     card: {

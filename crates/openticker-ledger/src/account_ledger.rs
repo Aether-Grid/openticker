@@ -1,8 +1,34 @@
 use std::collections::HashMap;
 
+use serde::Serialize;
+
+use crate::exceptions::LedgerException;
+use crate::ownership::LedgerOwnerPath;
 use crate::portfolio::{AccountPortfolioSnapshot, BotPortfolioSnapshot, LanePortfolioSnapshot};
-use crate::types::{LedgerException, LedgerOwnerPath, ReservationError};
 use crate::util::{LEDGER_VALUE_TOLERANCE, sanitize_value};
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BotAllocationPolicy {
+    pub account_id: String,
+    pub bot_id: String,
+    pub pct: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReservationError {
+    BotCapacityExceeded,
+    AccountCapacityExceeded,
+}
+
+/// Error returned by mutating ledger accounting operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerError {
+    /// The supplied release amount was not a finite, strictly positive USD
+    /// value. Releases must subtract a concrete amount, so non-finite
+    /// (`NaN`/`Inf`) and non-positive (`<= 0`) inputs are rejected instead of
+    /// being silently sanitized to zero (which would trap reserved notional).
+    InvalidReleaseAmount,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct AccountLedger {
@@ -102,12 +128,31 @@ impl AccountLedger {
         Ok(())
     }
 
-    pub fn release_reservation(&mut self, owner: &LedgerOwnerPath, notional_usd: f64) {
-        adjust_owner_notional(
-            &mut self.lane_reserved_notional_usd,
-            owner,
-            -sanitize_value(notional_usd),
-        );
+    /// Releases previously reserved open notional for an owner path.
+    ///
+    /// The release amount must be a finite, strictly positive USD value. The
+    /// effect is clamped at a zero floor: releasing more than is currently
+    /// reserved removes the owner's reservation entirely rather than driving
+    /// the tracked total negative (reconciliation can legitimately request an
+    /// over-release due to rounding or out-of-order events), but such a valid
+    /// positive request still returns `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LedgerError::InvalidReleaseAmount` when `notional_usd` is
+    /// non-finite (`NaN`/`Inf`) or non-positive (`<= 0`). Such inputs are not
+    /// valid release amounts; rejecting them avoids silently trapping reserved
+    /// notional (the prior `sanitize_value` behavior turned them into no-ops).
+    pub fn release_reservation(
+        &mut self,
+        owner: &LedgerOwnerPath,
+        notional_usd: f64,
+    ) -> Result<(), LedgerError> {
+        if !notional_usd.is_finite() || notional_usd <= 0.0 {
+            return Err(LedgerError::InvalidReleaseAmount);
+        }
+        adjust_owner_notional(&mut self.lane_reserved_notional_usd, owner, -notional_usd);
+        Ok(())
     }
 
     pub fn reconcile_open_fill(
@@ -120,7 +165,13 @@ impl AccountLedger {
         let reserved_notional_usd = sanitize_value(reserved_notional_usd);
 
         if reserved_notional_usd > LEDGER_VALUE_TOLERANCE {
-            self.release_reservation(owner, reserved_notional_usd);
+            // `reserved_notional_usd` was sanitized above and is strictly
+            // positive and finite here, so the release can never be invalid.
+            let release_result = self.release_reservation(owner, reserved_notional_usd);
+            debug_assert!(
+                release_result.is_ok(),
+                "sanitized reserved notional must be a valid release amount"
+            );
         }
 
         if filled_notional_usd > LEDGER_VALUE_TOLERANCE {
@@ -128,12 +179,30 @@ impl AccountLedger {
         }
     }
 
-    pub fn release_position(&mut self, owner: &LedgerOwnerPath, notional_usd: f64) {
-        adjust_owner_notional(
-            &mut self.lane_open_notional_usd,
-            owner,
-            -sanitize_value(notional_usd),
-        );
+    /// Releases attributed open position notional for an owner path.
+    ///
+    /// The release amount must be a finite, strictly positive USD value. The
+    /// effect is clamped at a zero floor: releasing more than is currently
+    /// attributed removes the owner's open notional entirely rather than
+    /// driving the tracked total negative, but such a valid positive request
+    /// still returns `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LedgerError::InvalidReleaseAmount` when `notional_usd` is
+    /// non-finite (`NaN`/`Inf`) or non-positive (`<= 0`). Such inputs are not
+    /// valid release amounts; rejecting them avoids silently trapping open
+    /// notional (the prior `sanitize_value` behavior turned them into no-ops).
+    pub fn release_position(
+        &mut self,
+        owner: &LedgerOwnerPath,
+        notional_usd: f64,
+    ) -> Result<(), LedgerError> {
+        if !notional_usd.is_finite() || notional_usd <= 0.0 {
+            return Err(LedgerError::InvalidReleaseAmount);
+        }
+        adjust_owner_notional(&mut self.lane_open_notional_usd, owner, -notional_usd);
+        Ok(())
     }
 
     #[must_use]
@@ -334,117 +403,4 @@ fn adjust_owner_notional(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::AccountLedger;
-    use crate::{LedgerException, LedgerExceptionKind, LedgerOwnerPath, ReservationError};
-
-    #[test]
-    fn effective_cap_uses_declared_total_until_live_balance_is_lower() {
-        let mut ledger = AccountLedger::new(1_000.0);
-
-        assert!((ledger.effective_cap_usd() - 1_000.0).abs() < 1e-6);
-
-        ledger.set_live_balance_usd(Some(1_200.0));
-        assert!((ledger.effective_cap_usd() - 1_000.0).abs() < 1e-6);
-
-        ledger.set_live_balance_usd(Some(800.0));
-        assert!((ledger.effective_cap_usd() - 800.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn partial_open_fill_releases_unused_reservation() {
-        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
-        let mut ledger = AccountLedger::new(1_000.0);
-
-        assert!(ledger.try_reserve_open(&owner, 400.0, 50.0).is_ok());
-        assert!((ledger.total_reserved_open_notional_usd() - 400.0).abs() < 1e-6);
-        assert!(ledger.total_attributed_open_notional_usd().abs() < 1e-6);
-
-        ledger.reconcile_open_fill(&owner, 250.0, 400.0);
-        assert!(ledger.total_reserved_open_notional_usd().abs() < 1e-6);
-        assert!((ledger.total_attributed_open_notional_usd() - 250.0).abs() < 1e-6);
-        assert!((ledger.total_committed_notional_usd() - 250.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn fill_larger_than_reserved_does_not_double_count_committed_notional() {
-        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
-        let mut ledger = AccountLedger::new(1_000.0);
-
-        assert!(ledger.try_reserve_open(&owner, 200.0, 100.0).is_ok());
-        ledger.reconcile_open_fill(&owner, 300.0, 200.0);
-
-        assert!(ledger.total_reserved_open_notional_usd().abs() < 1e-6);
-        assert!((ledger.total_attributed_open_notional_usd() - 300.0).abs() < 1e-6);
-        assert!((ledger.total_committed_notional_usd() - 300.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn blocking_exception_zeroes_tradeable_room_without_corrupting_available_room() {
-        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
-        let mut ledger = AccountLedger::new(1_000.0);
-        ledger.replace_lane_open_notional([(owner, 250.0)]);
-        ledger.replace_exceptions(vec![LedgerException {
-            kind: LedgerExceptionKind::AmbiguousSymbolOwner,
-            owner: None,
-            symbol: Some("MSFT".to_owned()),
-            detail: "matching_bots=bot-a,bot-b".to_owned(),
-            blocks_new_opens: true,
-        }]);
-
-        let snapshot = ledger.account_snapshot("acct");
-        assert!((ledger.account_available_open_room_usd() - 750.0).abs() < 1e-6);
-        assert!((snapshot.attributed_open_notional_usd - 250.0).abs() < 1e-6);
-        assert!(snapshot.unattributed_open_notional_usd.abs() < 1e-6);
-        assert!(snapshot.tradeable_open_room_usd.abs() < 1e-6);
-        assert!((snapshot.blocked_open_room_usd - 750.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn lane_snapshots_are_sorted_and_skip_zero_committed_rows() {
-        let owner_a = LedgerOwnerPath::new("acct", "bot-b", "MSFT");
-        let owner_b = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
-        let owner_c = LedgerOwnerPath::new("acct", "bot-c", "NVDA");
-        let mut ledger = AccountLedger::new(1_000.0);
-        ledger.replace_lane_open_notional([(owner_a.clone(), 100.0), (owner_b.clone(), 50.0)]);
-        assert!(ledger.try_reserve_open(&owner_c, 25.0, 100.0).is_ok());
-        ledger.release_reservation(&owner_c, 25.0);
-
-        let snapshots = ledger.lane_snapshots();
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].owner, owner_b);
-        assert_eq!(snapshots[1].owner, owner_a);
-    }
-
-    #[test]
-    fn reservation_release_is_idempotent_under_small_dust_values() {
-        let owner = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
-        let mut ledger = AccountLedger::new(1_000.0);
-
-        assert!(ledger.try_reserve_open(&owner, 100.0, 100.0).is_ok());
-        ledger.release_reservation(&owner, 100.0 - 5e-10);
-        ledger.release_reservation(&owner, 1.0);
-
-        assert!(ledger.total_reserved_open_notional_usd().abs() < 1e-6);
-        assert!(ledger.lane_snapshots().is_empty());
-    }
-
-    #[test]
-    fn bot_and_account_caps_both_apply_to_reservations() {
-        let bot_a = LedgerOwnerPath::new("acct", "bot-a", "AAPL");
-        let bot_b = LedgerOwnerPath::new("acct", "bot-b", "MSFT");
-        let mut ledger = AccountLedger::new(1_000.0);
-
-        assert!(ledger.try_reserve_open(&bot_a, 400.0, 40.0).is_ok());
-        assert_eq!(
-            ledger.try_reserve_open(&bot_a, 10.0, 40.0),
-            Err(ReservationError::BotCapacityExceeded)
-        );
-
-        assert!(ledger.try_reserve_open(&bot_b, 500.0, 60.0).is_ok());
-        assert_eq!(
-            ledger.try_reserve_open(&LedgerOwnerPath::new("acct", "bot-c", "NVDA"), 200.0, 30.0,),
-            Err(ReservationError::AccountCapacityExceeded)
-        );
-    }
-}
+mod tests;

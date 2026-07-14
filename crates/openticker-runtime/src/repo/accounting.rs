@@ -193,11 +193,23 @@ impl RuntimeRepoRead<'_> {
         let account_lanes = self.accounting_lanes_for_account(account_id);
 
         let ledger = self.account_ledger_handle(account_id)?;
-        let mut ledger = ledger.lock().map_err(|_| {
-            ServiceError::InvalidConfiguration(format!(
-                "capital ledger lock poisoned for account `{account_id}`"
-            ))
-        })?;
+        let mut ledger = match ledger.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Recovery is justified because the sync below rebuilds lane
+                // open-notional attribution via `sync_account_ledger_from_lanes`.
+                // Other ledger state (reserved notional, live balance, unattributed
+                // notional, exceptions) may still reflect a partially-applied update
+                // from the panicked operation and will surface via subsequent
+                // reconciliation/exception paths.
+                warn!(
+                    account_id,
+                    "capital ledger lock poisoned; recovering and re-syncing from instances"
+                );
+                ledger.clear_poison();
+                poisoned.into_inner()
+            }
+        };
         openticker_portfolio::sync_account_ledger_from_lanes(&mut ledger, &account_lanes);
         Ok(())
     }

@@ -61,10 +61,28 @@ impl CycleTraceSummary {
     }
 }
 
+#[must_use]
+pub fn build_cycle_summary(
+    identity: &TraceIdentity,
+    signal: IndicatorSignal,
+    intent: TradeIntent,
+    risk_decision: CycleRiskDecisionLabel,
+    outcome: CycleOutcome,
+    created_at_ms: i64,
+) -> CycleTraceSummary {
+    CycleTraceSummary::from_identity(
+        identity,
+        signal,
+        intent,
+        risk_decision,
+        outcome,
+        created_at_ms,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CycleTriggerKind;
     use openticker_core::{IndicatorSignal, SignalPhase, TradeIntent};
 
     #[test]

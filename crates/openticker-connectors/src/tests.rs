@@ -226,7 +226,7 @@ fn connector_registry_fetches_confirmed_range_page_oldest_first() {
 
 #[test]
 fn connector_registry_tracks_disconnect_reconnect_and_rate_limit_windows() {
-    let mut registry = ConnectorRegistry::from_accounts(vec![test_account(
+    let registry = ConnectorRegistry::from_accounts(vec![test_account(
         "alpaca-paper",
         ConnectorKind::Alpaca,
         ExecutionMode::Paper,

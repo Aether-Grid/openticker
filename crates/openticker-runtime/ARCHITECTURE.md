@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-Last reviewed: 2026-04-18
+Last reviewed: 2026-07-14
 
 ## Role
 
@@ -80,16 +80,18 @@ The crate uses a behavior-grouped module layout.
 | `src/lifecycle.rs` | Instance lifecycle transitions |
 | `src/manual_ops.rs` | Manual operator actions (cancel/close/kill-switch) |
 | `src/portfolio_adapter.rs` | Runtime adapter over ledger snapshots and account-budget synchronization |
-| `src/persistence.rs` | Runtime, instance, and pipeline journal writes |
 | `src/connector_gateway.rs` | Connector readiness and symbol-constraint orchestration |
+| `src/polling_supervisor/` | Supervisor lifecycle, due-stream polling, and preview-stream workers |
 | `src/queries/` | Runtime summary and journal-backed read APIs |
 | `src/processing/` | Bar and manual-signal planning/execution/journaling pipeline |
-| `src/market_data/` | Ingestion, polling, stream dispatch, and warmup orchestration |
+| `src/market_data/` | Ingestion, polling, pending provider events, stream dispatch, recovery, and warmup orchestration |
 | `src/reconciliation/` | Startup and manual reconciliation orchestration |
 | `src/model/` | Public API DTOs and internal runtime state structs |
 | `src/runtime_wiring.rs` | Runtime indicator/strategy builders and engine helpers |
 | `src/shared/` | Shared helper functions (labels, budgets, inventory, symbols, event logging) |
+| `src/repo/` | Runtime repositories, journal writes/read queries, bootstrap, accounting, and provider events |
 | `src/errors.rs` | `ServiceError` |
+| `tests/common/mod.rs` | Shared integration-test mock HTTP and temporary database helpers |
 | `tests/stock_paper_end_to_end.rs` | Stock paper integration test |
 | `tests/stock_reconciliation_restart.rs` | Restart and reconciliation integration test |
 | `tests/crypto_kline_ingestion.rs` | Crypto ingestion integration test |
@@ -178,6 +180,9 @@ Startup flow is intentionally guarded:
 - Polling ownership now lives in `openticker-runtime` through
   `RuntimePollingSupervisor`; `openticker-http` only starts and stops the
   runtime-owned supervisor.
+- Provider fetches that must run without the runtime write lock are isolated in
+  `market_data/pending_provider_events.rs`, and recovery mutations are isolated
+  from recovery planning in `market_data/recovery_state.rs`.
 - `evaluate_process_bar(...)` still uses placeholder stale-data, spread, and
   slippage inputs in some paths.
 - `cancel_open_orders(...)` remains journaling-oriented and is not yet a full

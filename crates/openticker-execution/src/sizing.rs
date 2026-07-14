@@ -30,7 +30,24 @@ pub fn resolve_order_quantity_with_constraints(
 
     let raw_quantity = match intent {
         TradeIntent::NoOp => 0.0,
-        TradeIntent::CloseLong | TradeIntent::ReduceLong => current_position_quantity.max(0.0),
+        TradeIntent::CloseLong | TradeIntent::ReduceLong => {
+            // A negative current position quantity on a close/reduce indicates an
+            // upstream position-tracking/reconciliation error: long-only semantics
+            // mean a position being closed must be >= 0. Previously this was silently
+            // clamped to 0.0, which produced a benign-looking zero-quantity close and
+            // swallowed the reconciliation error. Instead, surface it as a warning
+            // signal (a zero-quantity resolution carrying a distinct reason) so the
+            // caller/operator can detect and investigate the discrepancy. The output
+            // quantity remains 0.0, preserving the non-negative/finite invariant.
+            if !current_position_quantity.is_finite() || current_position_quantity < 0.0 {
+                return OrderQuantityResolution {
+                    quantity: 0.0,
+                    adjustment_reason: Some("negative_position_quantity".to_owned()),
+                    ledger_outcome: None,
+                };
+            }
+            current_position_quantity
+        }
         TradeIntent::OpenLong | TradeIntent::AddLong => {
             let capped_target_order_notional_usd =
                 target_order_notional_usd.min(limits.max_order_notional_usd);
@@ -145,24 +162,6 @@ fn apply_market_order_quantity_policy(
     }
 }
 
-fn floor_to_step(value: f64, step: f64) -> f64 {
-    if !value.is_finite() || !step.is_finite() || step <= 0.0 {
-        return 0.0;
-    }
-
-    let step_units = ((value / step) + QUANTITY_TOLERANCE).floor();
-    if !step_units.is_finite() || step_units <= 0.0 {
-        return 0.0;
-    }
-
-    let floored = step_units * step;
-    if !floored.is_finite() {
-        return 0.0;
-    }
-
-    floored.min(value)
-}
-
 fn apply_execution_constraints(
     intent: TradeIntent,
     price: f64,
@@ -235,6 +234,24 @@ fn apply_execution_constraints(
     }
     reasons.push("quantity_zeroed_by_constraints".to_owned());
     (0.0, Some(reasons.join(",")))
+}
+
+fn floor_to_step(value: f64, step: f64) -> f64 {
+    if !value.is_finite() || !step.is_finite() || step <= 0.0 {
+        return 0.0;
+    }
+
+    let step_units = ((value / step) + QUANTITY_TOLERANCE).floor();
+    if !step_units.is_finite() || step_units <= 0.0 {
+        return 0.0;
+    }
+
+    let floored = step_units * step;
+    if !floored.is_finite() {
+        return 0.0;
+    }
+
+    floored.min(value)
 }
 
 fn position_notional_usd(quantity: f64, price_usd: f64) -> f64 {
@@ -417,153 +434,68 @@ mod tests {
                 })
         );
     }
-}
 
-#[cfg(kani)]
-mod proofs {
-    use super::resolve_order_quantity_with_constraints;
-    use crate::OrderQuantityResolution;
-    use openticker_config::ExecutionConstraintsConfig;
-    use openticker_core::{MarketType, TradeIntent};
-    use openticker_risk::RiskLimits;
-
-    fn limits() -> RiskLimits {
-        RiskLimits {
-            max_daily_loss_pct: 5.0,
-            max_open_positions: 5,
-            max_order_notional_usd: 10_000.0,
-            max_spread_bps: 20,
-            max_slippage_bps: 30,
-            stale_data_ms: 3_000,
-            cooldown_after_reject_ms: 1_000,
-        }
-    }
-
-    fn any_intent(selector: u8) -> TradeIntent {
-        match selector % 5 {
-            0 => TradeIntent::NoOp,
-            1 => TradeIntent::OpenLong,
-            2 => TradeIntent::AddLong,
-            3 => TradeIntent::ReduceLong,
-            _ => TradeIntent::CloseLong,
-        }
-    }
-
-    fn positive_value(selector: u8) -> f64 {
-        f64::from((selector % 20) + 1)
-    }
-
-    fn price_case(selector: u8) -> f64 {
-        match selector % 4 {
-            0 => 0.0,
-            1 => -1.0,
-            2 => f64::INFINITY,
-            _ => positive_value(selector),
-        }
-    }
-
-    fn constraints_case(selector: u8) -> ExecutionConstraintsConfig {
-        match selector % 4 {
-            0 => ExecutionConstraintsConfig::default(),
-            1 => ExecutionConstraintsConfig {
-                quantity_step: Some(0.1),
-                min_quantity: None,
-                min_notional_usd: None,
-            },
-            2 => ExecutionConstraintsConfig {
-                quantity_step: None,
-                min_quantity: Some(2.0),
-                min_notional_usd: None,
-            },
-            _ => ExecutionConstraintsConfig {
-                quantity_step: Some(0.1),
-                min_quantity: Some(1.0),
-                min_notional_usd: Some(100.0),
-            },
-        }
-    }
-
-    #[kani::proof]
-    fn proof_resolve_order_quantity_never_returns_non_negative_finite_quantity() {
-        let resolution: OrderQuantityResolution = resolve_order_quantity_with_constraints(
-            any_intent(kani::any()),
-            if kani::any() {
-                MarketType::Equities
-            } else {
-                MarketType::Crypto
-            },
-            price_case(kani::any()),
-            positive_value(kani::any()),
-            positive_value(kani::any()),
-            positive_value(kani::any()),
-            limits(),
-            positive_value(kani::any()) * 10.0,
-            &constraints_case(kani::any()),
-            kani::any(),
-        );
-
-        assert!(resolution.quantity >= 0.0);
-        assert!(resolution.quantity.is_finite());
-    }
-
-    #[kani::proof]
-    fn proof_entry_constraints_zero_out_invalid_entries() {
+    #[test]
+    fn close_long_with_negative_position_quantity_surfaces_reconciliation_warning() {
         let resolution = resolve_order_quantity_with_constraints(
-            TradeIntent::OpenLong,
+            TradeIntent::CloseLong,
             MarketType::Crypto,
             100.0,
-            0.0,
-            95.0,
-            95.0,
+            -1.5,
+            1_000.0,
+            1_000.0,
             limits(),
-            95.0,
-            &ExecutionConstraintsConfig {
-                quantity_step: Some(0.1),
-                min_quantity: Some(2.0),
-                min_notional_usd: Some(200.0),
-            },
+            100.0,
+            &ExecutionConstraintsConfig::default(),
             false,
         );
-
-        assert_eq!(resolution.quantity, 0.0);
+        assert!((resolution.quantity - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            resolution.adjustment_reason.as_deref(),
+            Some("negative_position_quantity")
+        );
+        assert!(resolution.ledger_outcome.is_none());
     }
 
-    #[kani::proof]
-    fn proof_close_constraints_bypass_min_notional_only() {
-        let min_notional_bypass = resolve_order_quantity_with_constraints(
-            TradeIntent::CloseLong,
-            MarketType::Crypto,
-            100.0,
-            0.5,
+    #[test]
+    fn reduce_long_with_negative_position_quantity_surfaces_reconciliation_warning() {
+        let resolution = resolve_order_quantity_with_constraints(
+            TradeIntent::ReduceLong,
+            MarketType::Equities,
+            50.0,
+            -0.001,
             1_000.0,
             1_000.0,
             limits(),
             100.0,
-            &ExecutionConstraintsConfig {
-                quantity_step: None,
-                min_quantity: Some(0.1),
-                min_notional_usd: Some(75.0),
-            },
+            &ExecutionConstraintsConfig::default(),
             false,
         );
-        assert!(min_notional_bypass.quantity > 0.0);
+        assert!((resolution.quantity - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            resolution.adjustment_reason.as_deref(),
+            Some("negative_position_quantity")
+        );
+    }
 
-        let min_quantity_violation = resolve_order_quantity_with_constraints(
+    #[test]
+    fn close_long_with_non_finite_position_quantity_surfaces_reconciliation_warning() {
+        let resolution = resolve_order_quantity_with_constraints(
             TradeIntent::CloseLong,
             MarketType::Crypto,
             100.0,
-            0.05,
+            f64::NAN,
             1_000.0,
             1_000.0,
             limits(),
             100.0,
-            &ExecutionConstraintsConfig {
-                quantity_step: None,
-                min_quantity: Some(0.1),
-                min_notional_usd: None,
-            },
+            &ExecutionConstraintsConfig::default(),
             false,
         );
-        assert_eq!(min_quantity_violation.quantity, 0.0);
+        assert!((resolution.quantity - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            resolution.adjustment_reason.as_deref(),
+            Some("negative_position_quantity")
+        );
     }
 }

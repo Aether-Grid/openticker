@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last reviewed: 2026-04-18
+Last reviewed: 2026-07-14
 
 ## Overview
 
@@ -17,13 +17,12 @@ budgeting, and journal-backed read models.
   - `src/construction.rs`
   - `src/lifecycle.rs`
   - `src/market_data/`
-  - `src/polling_supervisor.rs`
+  - `src/polling_supervisor/`
   - `src/processing/`
   - `src/reconciliation/`
   - `src/manual_ops.rs`
   - `src/portfolio_adapter.rs`
   - `src/queries/`
-  - `src/persistence.rs`
   - `src/connector_gateway.rs`
 - Shared support modules:
   - `src/model/`
@@ -41,13 +40,15 @@ budgeting, and journal-backed read models.
 - `Runtime` owns lanes, account config, account ledgers, connector registry,
   kill switch, observability, and runtime journal.
 - Runtime-owned background polling lifecycle is hosted by
-  `RuntimePollingSupervisor` in `src/polling_supervisor.rs` and coordinates
+  `RuntimePollingSupervisor` in `src/polling_supervisor/`; due-stream polling
+  and preview-stream workers are isolated in sibling modules and coordinate
   dataplane scheduling with runtime dispatch.
 - `LaneRuntime` owns per-lane state: indicator runtimes, strategy engine,
   bar-builder and warmup state, risk limits, position state, and connector
   execution constraints.
 - `src/model/` holds internal runtime state structs and public API/read-model
-  types re-exported from `src/lib.rs`.
+  types re-exported from `src/lib.rs`; lane DTO aliases are re-exported
+  directly from its module index rather than one-line shim files.
 - `openticker-lane` now owns extracted lane state structs, lane bootstrap and
   recovered-state helpers, and lane-local internal DTOs plus the extracted lane
   cycle and polling workflow algorithms; warmup backfill logic is now on the
@@ -63,6 +64,9 @@ budgeting, and journal-backed read models.
   `src/connector_gateway.rs`, plus repo-backed accounting/reconciliation helper
   assembly and journal bootstrap reads; the read-side accounting surface no longer lives in
   `src/portfolio_adapter.rs`.
+- `src/repo/journal.rs` owns writes; `src/repo/journal_reads.rs` owns read queries.
+- Shared integration-test network and temporary-database helpers live in
+  `tests/common/mod.rs`.
 - `src/processing/constraints.rs` now owns the lane-local connector symbol
   constraint initialization workflow, so `src/connector_gateway.rs` is a
   thinner read-only runtime adapter.

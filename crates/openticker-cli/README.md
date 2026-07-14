@@ -26,7 +26,7 @@ It also contains the Ratatui dashboard for an always-on operator view.
   Shared HTTP request/print helpers, journaling-only warning output, and live-mode banner extraction.
 - `src/tracing_setup.rs`
   Tracing and file logging bootstrap.
-- `src/dashboard.rs`
+- `src/dashboard/`
   Implements the interactive Ratatui dashboard. It polls the HTTP API for a composite snapshot and binds keyboard actions to instance and kill-switch endpoints.
 
 There is intentionally very little business logic here. The crate mostly translates operator intent into HTTP requests or local config loading.
@@ -79,7 +79,7 @@ This architecture keeps the dashboard aligned with the same contracts used by co
 ## Refactor Notes
 
 - Command-side code is now split by concern; add new commands by extending `src/cli.rs` and the matching `src/commands/*` module.
-- Dashboard polling and rendering are still in one large file.
+- Dashboard polling, state, input, and rendering are split into focused modules under `src/dashboard/`.
 - If response shapes change in `openticker-http`, this crate is usually the first downstream consumer that will need updates.
 
 ## Verify

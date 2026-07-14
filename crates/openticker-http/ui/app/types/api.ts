@@ -435,3 +435,270 @@ export interface OpenApiSpec {
   paths?: Record<string, Record<string, { summary?: string; operationId?: string }>>
   [key: string]: unknown
 }
+
+// ---------------------------------------------------------------------------
+// Config editing
+//
+// These types mirror the Rust config model exactly. The wire (JSON) field
+// names and enum string values come from openticker-config/src/model.rs and
+// the core enum definitions (Timeframe, MarketType, ExecutionMode,
+// IndicatorRole, IndicatorSignalPolicy). Notable serde renames preserved here:
+//   - EffectiveConfig.instances is serialized as `bots`
+//   - IndicatorInstanceConfig.indicator_type is serialized as `type`
+//   - The accounts list is `risk_profiles` (not `risk`)
+// AccountConfigUpdate intentionally omits `id` and the three `*_env` secret
+// fields; the read shape (EffectiveAccountConfig) carries `secret_status`.
+// ---------------------------------------------------------------------------
+
+export type Timeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d'
+
+export type MarketType = 'equities' | 'crypto'
+
+export type ExecutionMode = 'paper' | 'live'
+
+export type SignalMode = 'intrabar' | 'confirmed_only'
+
+export type IndicatorRole = 'primary_signal' | 'filter' | 'context' | 'risk_helper' | 'research_only'
+
+export type IndicatorSignalPolicy = 'preview_allowed' | 'confirmed_required'
+
+export type SignalStrength = 'normal' | 'strong'
+
+export interface SignalMetadataFilter {
+  allowed_strengths?: SignalStrength[]
+  allowed_reason_codes?: string[]
+  required_tags_all?: string[]
+  required_tags_any?: string[]
+  blocked_tags?: string[]
+}
+
+export interface IndicatorSignalMetadataFilters {
+  entry?: SignalMetadataFilter
+  exit?: SignalMetadataFilter
+}
+
+export interface DataPlaneWatchlistEntry {
+  account: string
+  symbol: string
+  timeframe: Timeframe
+  polling_interval_ms?: number | null
+  retention?: number | null
+}
+
+export interface DataPlaneConfig {
+  default_polling_interval_ms: number
+  default_retention: number
+  watchlist: DataPlaneWatchlistEntry[]
+}
+
+export interface ServiceConfig {
+  environment: string
+  data_dir: string
+  bot_dir: string
+}
+
+export interface HttpConfig {
+  enabled: boolean
+  bind: string
+  request_log: boolean
+  openapi_enabled: boolean
+  openapi_path: string
+}
+
+export interface StorageConfig {
+  kind: string
+  path: string
+  busy_timeout_ms: number
+  prune_removed_bots_on_startup: boolean
+}
+
+export interface ObservabilityConfig {
+  log_level: string
+  metrics_enabled: boolean
+  metrics_path: string
+}
+
+export interface SafetyConfig {
+  require_explicit_live_enable: boolean
+  default_start_paused_if_recovery_uncertain: boolean
+}
+
+export interface GlobalConfig {
+  service: ServiceConfig
+  http: HttpConfig
+  storage: StorageConfig
+  observability: ObservabilityConfig
+  safety: SafetyConfig
+  data_plane: DataPlaneConfig
+}
+
+export interface AccountSecretStatus {
+  api_key_present: boolean
+  api_secret_present: boolean
+  passphrase_present: boolean
+}
+
+/** Read shape: secrets are redacted to a presence-only `secret_status`. */
+export interface EffectiveAccountConfig {
+  id: string
+  kind: string
+  mode: ExecutionMode
+  use_demo_mode: boolean
+  reconciliation_remote_snapshot: boolean
+  execution_remote_submission: boolean
+  reconciliation_base_url: string | null
+  cash_balance_assets: string[]
+  total_budget_usd: number
+  secret_status: AccountSecretStatus
+}
+
+/**
+ * Write shape for `PUT /v1/config/accounts/{id}`. Mirrors AccountConfig minus
+ * `id` and the three `*_env` secret references. The backend uses
+ * `deny_unknown_fields`, so sending `api_key_env` etc. is a 422.
+ */
+export interface AccountConfigUpdate {
+  kind: string
+  mode: ExecutionMode
+  use_demo_mode: boolean
+  reconciliation_remote_snapshot: boolean
+  execution_remote_submission?: boolean | null
+  reconciliation_base_url?: string | null
+  cash_balance_assets: string[]
+  total_budget_usd: number
+}
+
+export interface RiskProfileConfig {
+  id: string
+  max_daily_loss_pct: number
+  max_open_positions: number
+  target_order_notional_usd?: number | null
+  max_order_notional_usd: number
+  max_spread_bps: number
+  max_slippage_bps: number
+  stale_data_ms: number
+  cooldown_after_reject_ms: number
+}
+
+/** Per-instance risk overrides: same fields as RiskProfileConfig minus `id`, all optional. */
+export interface RiskOverrides {
+  max_daily_loss_pct?: number | null
+  max_open_positions?: number | null
+  target_order_notional_usd?: number | null
+  max_order_notional_usd?: number | null
+  max_spread_bps?: number | null
+  max_slippage_bps?: number | null
+  stale_data_ms?: number | null
+  cooldown_after_reject_ms?: number | null
+}
+
+export interface InstanceRiskConfig {
+  profile: string
+  overrides: RiskOverrides
+}
+
+export interface ExecutionConstraintsConfig {
+  quantity_step?: number | null
+  min_quantity?: number | null
+  min_notional_usd?: number | null
+}
+
+export interface BudgetConfig {
+  pct: number
+}
+
+export interface IndicatorInstanceConfig {
+  id: string
+  /** Rust field `indicator_type`, serialized as `type`. */
+  type: string
+  enabled: boolean
+  role?: IndicatorRole | null
+  signal_policy?: IndicatorSignalPolicy | null
+  weight?: number | null
+  metadata_filters?: IndicatorSignalMetadataFilters
+  /** Open key/value map (TOML table on the backend). */
+  params: Record<string, unknown>
+}
+
+/** The InstanceConfig shape; named BotConfig for the UI. */
+export interface BotConfig {
+  id: string
+  enabled: boolean
+  market: MarketType
+  symbols: string[]
+  timeframe: Timeframe
+  account: string
+  data_connector: string
+  execution_connector: string
+  strategy: string
+  signal_mode: SignalMode
+  polling_enabled: boolean
+  polling_interval_ms: number
+  indicators: IndicatorInstanceConfig[]
+  execution_constraints: ExecutionConstraintsConfig
+  budget: BudgetConfig
+  risk: InstanceRiskConfig
+  warmup_target_bars?: number | null
+  allow_live: boolean
+}
+
+export interface EffectiveConfig {
+  global: GlobalConfig
+  accounts: EffectiveAccountConfig[]
+  risk_profiles: RiskProfileConfig[]
+  bots: BotConfig[]
+  /** Present on read paths that attach the current reload generation. */
+  generation?: number
+}
+
+export type ConfigReloadTrigger = 'manual_api' | 'config_write' | 'file_watcher'
+
+export type ConfigReloadOutcome = 'reloaded' | 'no_change' | 'rejected' | 'failed'
+
+export interface ConfigViolation {
+  /** Stable machine-readable code, e.g. `storage_changed`. */
+  code: string
+  /** `"global"`, `"account:<id>"`, or `"bot:<id>"`. */
+  scope: string
+  message: string
+}
+
+export interface ConfigErrorResponse {
+  error: string
+  violations?: ConfigViolation[]
+}
+
+export interface ConfigReloadStatus {
+  at_ms: number
+  trigger: ConfigReloadTrigger
+  outcome: ConfigReloadOutcome
+  error: string | null
+  violations: ConfigViolation[]
+  generation: number
+}
+
+export interface ConfigReloadStatusResponse {
+  generation: number
+  last: ConfigReloadStatus | null
+  history: ConfigReloadStatus[]
+}
+
+/**
+ * Result of a config mutation; 422 and 409 are returned for inline rendering,
+ * not thrown. A 409 carries `violations`; a 422 carries `error` only.
+ */
+export interface ConfigSaveResult<T = unknown> {
+  ok: boolean
+  /**
+   * HTTP status of the error response (409 / 422 / etc). Left undefined on
+   * success: the success status varies by route (createBot is 201, others 200)
+   * and callers branch on `ok` rather than the success status.
+   */
+  status?: number
+  error?: string
+  violations?: ConfigViolation[]
+  /** Success-body entity (global/bot/risk_profile/account), when present. */
+  entity?: T
+  /** Reload generation after the write. */
+  generation?: number
+}

@@ -1,3 +1,4 @@
+use crate::support::now_timestamp_ms;
 use crate::{
     EventWrite, FillRecord, FillWrite, IntentRecord, IntentWrite, OrderRecord, OrderWrite,
     PositionRecord, PositionWrite, ReconciliationRecord, ReconciliationWrite, RiskDecisionRecord,
@@ -5,7 +6,6 @@ use crate::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const GLOBAL_FEED_CAPACITY: usize = 2_048;
 const BOT_FEED_CAPACITY: usize = 512;
@@ -351,15 +351,37 @@ impl OperatorReadModels {
     }
 
     fn read_state(&self) -> std::sync::RwLockReadGuard<'_, OperatorReadModelsState> {
-        self.state
-            .read()
-            .expect("operator read model read lock should not be poisoned")
+        match self.state.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Workspace policy: recover from poisoning and log instead of
+                // failing forever. The read models hold plain in-memory
+                // collections that stay structurally valid after a panic in
+                // another thread.
+                self.state.clear_poison();
+                tracing::warn!(
+                    "operator read model lock was poisoned; clearing poison and recovering"
+                );
+                poisoned.into_inner()
+            }
+        }
     }
 
     fn write_state(&self) -> std::sync::RwLockWriteGuard<'_, OperatorReadModelsState> {
-        self.state
-            .write()
-            .expect("operator read model write lock should not be poisoned")
+        match self.state.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Workspace policy: recover from poisoning and log instead of
+                // failing forever. The read models hold plain in-memory
+                // collections that stay structurally valid after a panic in
+                // another thread.
+                self.state.clear_poison();
+                tracing::warn!(
+                    "operator read model lock was poisoned; clearing poison and recovering"
+                );
+                poisoned.into_inner()
+            }
+        }
     }
 }
 
@@ -545,13 +567,6 @@ fn next_id(counter: &mut i64) -> i64 {
     let id = *counter;
     *counter = counter.saturating_add(1);
     id
-}
-
-fn now_timestamp_ms() -> i64 {
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
 }
 
 fn push_bounded<T>(records: &mut VecDeque<T>, record: T, capacity: usize) {

@@ -55,8 +55,9 @@ Representative examples:
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | Public exports and the object-safe `IndicatorEngine` trait |
-| `src/common.rs` | Shared math and series helpers |
+| `src/lib.rs` | Module wiring and public re-exports |
+| `src/engine.rs` | Object-safe `IndicatorEngine` contract, `SignalSnapshot`, and evaluation/build/descriptor types |
+| `src/common/` | Shared crate-internal helpers: rolling stats (`rolling.rs`), crossing predicates (`crossings.rs`), param parsing (`params.rs`) |
 | `src/manifest.rs` | Built-in indicator metadata and capabilities |
 | `src/observability.rs` | Actionable indicator-evaluation logging |
 | `src/registry.rs` | Built-in indicator descriptor helpers |
@@ -103,7 +104,7 @@ At runtime, the effective shape is:
 ## Current Implementation Realities
 
 - Built-in manifest metadata is descriptor-backed, so built-in metadata and built-in construction share one source of truth.
-- Shared math is partially centralized in `common.rs`, but some indicator files still carry local helper implementations.
+- Shared math is partially centralized in `src/common/`, but some indicator files still carry local helper implementations.
 - Several indicators are classified as filter or context components and currently do not emit actionable signals.
 - The contract stays pure, but engines are expected to be cloneable and deterministic because preview evaluation may run on cloned state.
 - `log_indicator_evaluation(...)` is the bridge between pure indicator logic and operator-visible traceability.

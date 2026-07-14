@@ -62,8 +62,8 @@ Primary public entrypoints:
 
 Concrete adapters:
 
-- `AlpacaConnector` in `src/connectors/alpaca.rs`
-- `BinanceConnector` in `src/connectors/binance.rs`
+- `AlpacaConnector` in `src/connectors/alpaca/connector.rs`
+- `BinanceConnector` in `src/connectors/binance/connector.rs`
 
 ## Internal Layout
 
@@ -78,8 +78,23 @@ Concrete adapters:
 | `src/stub.rs` | Stub connector behavior and trait implementations |
 | `src/registry.rs` | Account-keyed registry and operational dispatch |
 | `src/tests.rs` | Crate-level tests for shared behavior |
-| `src/connectors/alpaca.rs` | Alpaca REST adapter and normalization helpers |
-| `src/connectors/binance.rs` | Binance REST and stream adapter plus signing and normalization helpers |
+| `src/connectors/alpaca/mod.rs` | Alpaca module wiring and connector re-export |
+| `src/connectors/alpaca/connector.rs` | Alpaca connector and trait implementations |
+| `src/connectors/alpaca/account.rs` | Account payload and snapshot normalization |
+| `src/connectors/alpaca/bars.rs` | Historical-bar payloads and normalization |
+| `src/connectors/alpaca/orders.rs` | Order payload and acceptance helpers |
+| `src/connectors/alpaca/http.rs` | REST response decoding |
+| `src/connectors/alpaca/de.rs` | Alpaca decimal deserializers |
+| `src/connectors/alpaca/tests.rs` | Alpaca adapter unit tests |
+| `src/connectors/binance/mod.rs` | Binance module wiring and connector re-export |
+| `src/connectors/binance/connector.rs` | Binance connector and trait implementations |
+| `src/connectors/binance/snapshot.rs` | Account, open-order, and exchange-info normalization |
+| `src/connectors/binance/klines.rs` | Kline parsing and confirmed-bar normalization |
+| `src/connectors/binance/orders.rs` | Order submission, status, quantity, and fee helpers |
+| `src/connectors/binance/stream.rs` | Market/private websocket normalization and preview worker |
+| `src/connectors/binance/http.rs` | HMAC signing and REST response decoding |
+| `src/connectors/binance/de.rs` | Binance decimal deserializers |
+| `src/connectors/binance/tests.rs` | Binance adapter unit tests |
 
 Current layout now groups venue adapters under `src/connectors/`, while shared crate internals live in top-level focused modules.
 

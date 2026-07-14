@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last reviewed: 2026-04-22
+Last reviewed: 2026-06-10
 
 ## Overview
 
@@ -10,16 +10,16 @@ This crate is for reusable deterministic test helpers. It is intentionally small
 
 - Cargo package: `openticker-testkit`
 - Entry file: `src/lib.rs` (module wiring and re-exports)
-- Contextual files: `src/replay.rs`, `src/fixtures.rs`
+- Contextual files: `src/bundle.rs`, `src/fixtures.rs`, `src/reconciliation_server.rs`, `src/replay.rs`
 - Verify: `cargo test -p openticker-testkit`
 
 ## Current Working Shape
 
-- `replay_sma_crossover` is the current replay helper.
-- `close_only_bar` is the current bar-fixture helper.
-- `replay_sma_crossover` lives in `src/replay.rs`.
-- `close_only_bar` lives in `src/fixtures.rs`.
-- Both helpers are explicit and deterministic by design.
+- `replay_sma_crossover` (in `src/replay.rs`) is the current replay helper.
+- `close_only_bar` and `close_only_symbol_bar` (in `src/fixtures.rs`) are the bar-fixture helpers.
+- `shared_fixture_bundle` and `shared_fixture_bundle_for_symbol` (in `src/bundle.rs`) are the config-bundle helpers.
+- `spawn_fake_reconciliation_server` (in `src/reconciliation_server.rs`) is the fake reconciliation server helper.
+- All helpers are explicit and deterministic by design.
 
 ## Invariants
 

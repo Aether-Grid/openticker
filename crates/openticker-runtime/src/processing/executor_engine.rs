@@ -263,7 +263,15 @@ impl LaneExecutionEngine for ProcessingExecutor<'_> {
                 "capital ledger lock poisoned for account `{account_id}`"
             ))
         })?;
-        ledger.release_reservation(owner, reserve_notional_usd);
+        ledger
+            .release_reservation(owner, reserve_notional_usd)
+            .map_err(|crate::LedgerError::InvalidReleaseAmount| {
+                ServiceError::LedgerInvariantViolation {
+                    detail: format!(
+                        "invalid reservation release amount {reserve_notional_usd} for account `{account_id}`"
+                    ),
+                }
+            })?;
         Ok(())
     }
 
@@ -336,7 +344,15 @@ impl LaneExecutionEngine for ProcessingExecutor<'_> {
                 "capital ledger lock poisoned for account `{account_id}`"
             ))
         })?;
-        ledger.release_position(owner, released_notional_usd);
+        ledger
+            .release_position(owner, released_notional_usd)
+            .map_err(|crate::LedgerError::InvalidReleaseAmount| {
+                ServiceError::LedgerInvariantViolation {
+                    detail: format!(
+                        "invalid position release amount {released_notional_usd} for account `{account_id}`"
+                    ),
+                }
+            })?;
         Ok(())
     }
 

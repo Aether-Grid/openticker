@@ -1,6 +1,7 @@
 use openticker_core::TradeIntent;
 
-use super::*;
+use crate::policy::{BasicRiskPolicy, RiskPolicy};
+use crate::types::{RiskContext, RiskDecision, RiskLimits};
 
 fn baseline_policy() -> BasicRiskPolicy {
     BasicRiskPolicy {
@@ -230,4 +231,120 @@ fn kill_switch_rejects_before_other_checks() {
             reason: "kill switch enabled"
         }
     ));
+}
+
+#[test]
+fn simultaneous_open_limit_violations_reject_in_deterministic_priority_order() {
+    let policy = baseline_policy();
+
+    // Violate every open-only limit at once. The first failing check in
+    // `evaluate` order wins, so the priority is:
+    //   cooldown -> stale_data -> spread -> slippage -> daily_loss ->
+    //   notional -> open_positions.
+    let mut all_violated = baseline_context(TradeIntent::OpenLong);
+    all_violated.cooldown_active = true;
+    all_violated.stale_data = true;
+    all_violated.observed_spread_bps = policy.limits.max_spread_bps + 5;
+    all_violated.estimated_slippage_bps = policy.limits.max_slippage_bps + 5;
+    all_violated.account_daily_loss_pct = policy.limits.max_daily_loss_pct + 5.0;
+    all_violated.account_open_positions = policy.limits.max_open_positions + 5;
+    all_violated.quantity = policy.limits.max_order_notional_usd; // forces over-notional
+
+    assert!(matches!(
+        policy.evaluate(all_violated),
+        RiskDecision::Reject {
+            reason: "cooldown active"
+        }
+    ));
+
+    // Drop cooldown: stale data is now the highest-priority violation.
+    let mut without_cooldown = all_violated;
+    without_cooldown.cooldown_active = false;
+    assert!(matches!(
+        policy.evaluate(without_cooldown),
+        RiskDecision::Reject {
+            reason: "stale market data"
+        }
+    ));
+
+    // Drop stale data too: spread now wins over slippage/loss/notional/count.
+    let mut without_stale = without_cooldown;
+    without_stale.stale_data = false;
+    assert!(matches!(
+        policy.evaluate(without_stale),
+        RiskDecision::Reject {
+            reason: "spread exceeds max"
+        }
+    ));
+
+    // Then slippage, then daily loss, then notional, then open positions.
+    let mut without_spread = without_stale;
+    without_spread.observed_spread_bps = policy.limits.max_spread_bps;
+    assert!(matches!(
+        policy.evaluate(without_spread),
+        RiskDecision::Reject {
+            reason: "slippage exceeds max"
+        }
+    ));
+
+    let mut without_slippage = without_spread;
+    without_slippage.estimated_slippage_bps = policy.limits.max_slippage_bps;
+    assert!(matches!(
+        policy.evaluate(without_slippage),
+        RiskDecision::Reject {
+            reason: "daily loss exceeds max"
+        }
+    ));
+
+    let mut without_loss = without_slippage;
+    without_loss.account_daily_loss_pct = 0.0;
+    assert!(matches!(
+        policy.evaluate(without_loss),
+        RiskDecision::Reject {
+            reason: "order notional exceeds max"
+        }
+    ));
+
+    let mut without_notional = without_loss;
+    without_notional.quantity = 1.0; // notional now within limit
+    assert!(matches!(
+        policy.evaluate(without_notional),
+        RiskDecision::Reject {
+            reason: "open positions exceeds max"
+        }
+    ));
+}
+
+#[test]
+fn close_and_reduce_ops_reject_non_finite_or_negative_price_quantity() {
+    let policy = baseline_policy();
+    let invalid_values = [0.0_f64, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+
+    for intent in [TradeIntent::CloseLong, TradeIntent::ReduceLong] {
+        for invalid in invalid_values {
+            let mut bad_quantity = baseline_context(intent);
+            bad_quantity.quantity = invalid;
+            assert!(
+                matches!(
+                    policy.evaluate(bad_quantity),
+                    RiskDecision::Reject {
+                        reason: "order quantity must be positive"
+                    }
+                ),
+                "expected rejection for {intent:?} with quantity {invalid}"
+            );
+
+            let mut bad_price = baseline_context(intent);
+            bad_price.price = invalid;
+            assert!(
+                matches!(
+                    policy.evaluate(bad_price),
+                    RiskDecision::Reject {
+                        reason: "order quantity must be positive"
+                    }
+                ),
+                "expected rejection for {intent:?} with price {invalid}"
+            );
+        }
+    }
 }

@@ -25,10 +25,42 @@ impl Runtime {
 
     /// Builds a runtime backed by the configured persistent storage backend.
     ///
+    /// When `storage.prune_removed_bots_on_startup` is enabled, journal
+    /// history of bots absent from `config` is pruned before the runtime is
+    /// bootstrapped.
+    ///
     /// # Errors
     ///
     /// Returns an error when configuration is invalid or storage initialization fails.
     pub fn from_config_with_storage(config: &ConfigBundle) -> Result<Self, ServiceError> {
+        Self::from_config_with_storage_impl(config, true)
+    }
+
+    /// Like [`Self::from_config_with_storage`], but never runs the startup
+    /// prune step, even when `storage.prune_removed_bots_on_startup` is
+    /// enabled.
+    ///
+    /// Intended for callers that build a runtime from a *candidate*
+    /// configuration before that configuration has been committed to disk
+    /// (e.g. the HTTP config write endpoints): pruning at that point would
+    /// destroy a removed bot's journal history (including `PnL` recovery data)
+    /// even if the disk commit later fails, leaving a still-configured bot
+    /// with destroyed history. With this variant, pruning of removed bots is
+    /// deferred to the next service startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when configuration is invalid or storage initialization fails.
+    pub fn from_config_with_storage_without_prune(
+        config: &ConfigBundle,
+    ) -> Result<Self, ServiceError> {
+        Self::from_config_with_storage_impl(config, false)
+    }
+
+    fn from_config_with_storage_impl(
+        config: &ConfigBundle,
+        allow_prune: bool,
+    ) -> Result<Self, ServiceError> {
         config
             .validate()
             .map_err(|error| ServiceError::InvalidConfiguration(error.to_string()))?;
@@ -51,7 +83,7 @@ impl Runtime {
             }
         };
 
-        if storage.prune_removed_bots_on_startup {
+        if allow_prune && storage.prune_removed_bots_on_startup {
             let configured_instance_ids = config
                 .instances
                 .iter()

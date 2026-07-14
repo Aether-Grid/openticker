@@ -1,7 +1,8 @@
 use openticker_storage::{
-    FillWrite, InMemoryRuntimeJournal, OrderWrite, RuntimeJournal, SqliteRuntimeJournal,
-    StorageError,
+    BotSnapshotWrite, CycleTraceWrite, EventWrite, FillWrite, InMemoryRuntimeJournal, OrderWrite,
+    RuntimeJournal, SqliteRuntimeJournal, StorageError,
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,6 +42,75 @@ fn conflicting_duplicate_fills_keep_first_payload_across_backends() {
     let path = create_temp_db_path("fills-conflict");
     let journal = SqliteRuntimeJournal::open(&path, 1_000).unwrap();
     assert_conflicting_duplicate_fills_keep_first_payload(&journal).unwrap();
+}
+
+#[test]
+fn prune_bots_except_with_empty_set_clears_all_bot_data_across_backends() {
+    assert_empty_prune_clears_all_bot_data(&InMemoryRuntimeJournal::default()).unwrap();
+
+    let path = create_temp_db_path("prune-empty-set");
+    let journal = SqliteRuntimeJournal::open(&path, 1_000).unwrap();
+    assert_empty_prune_clears_all_bot_data(&journal).unwrap();
+}
+
+/// Pins the documented semantics of `RuntimeJournal::prune_bots_except`: an
+/// empty active set prunes ALL bot-scoped data on both backends, while
+/// runtime events without an entity id (global/service events) survive.
+fn assert_empty_prune_clears_all_bot_data(
+    journal: &dyn RuntimeJournal,
+) -> Result<(), StorageError> {
+    journal.append_order(order_write(123.45, "submitted"))?;
+    journal.append_fill(fill_write(123.45, 1.0))?;
+    journal.append_cycle_trace(CycleTraceWrite {
+        trace_id: "trace-aapl-1".to_owned(),
+        bot_id: "aapl".to_owned(),
+        symbol: "AAPL".to_owned(),
+        bar_timestamp: "2026-01-01T00:00:00Z".to_owned(),
+        phase: "confirmed".to_owned(),
+        trigger_kind: "market_bar".to_owned(),
+        signal: "buy_confirmed".to_owned(),
+        intent: "open_long".to_owned(),
+        risk_decision: "allowed".to_owned(),
+        outcome: "accepted_filled".to_owned(),
+        payload_json: "{}".to_owned(),
+    })?;
+    journal.upsert_bot_snapshot(BotSnapshotWrite {
+        bot_id: "aapl".to_owned(),
+        state: "running".to_owned(),
+        execution_mode: "paper".to_owned(),
+        enabled: true,
+    })?;
+    journal.append_event(EventWrite {
+        scope: "instance".to_owned(),
+        entity_id: Some("aapl".to_owned()),
+        trace_id: None,
+        kind: "instance.started".to_owned(),
+        payload: "{}".to_owned(),
+    })?;
+    journal.append_event(EventWrite {
+        scope: "service".to_owned(),
+        entity_id: None,
+        trace_id: None,
+        kind: "service.started".to_owned(),
+        payload: "{}".to_owned(),
+    })?;
+
+    journal.prune_bots_except(&HashSet::new())?;
+
+    assert!(journal.recent_orders(10)?.is_empty());
+    assert!(journal.recent_fills(10)?.is_empty());
+    assert!(
+        journal
+            .recent_cycle_traces_for_bot("aapl", None, None, None, None, 10)?
+            .is_empty()
+    );
+    assert!(journal.load_bot_snapshots()?.is_empty());
+
+    let events = journal.recent_events(10)?;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "service.started");
+    assert!(events[0].entity_id.is_none());
+    Ok(())
 }
 
 fn assert_order_idempotency(journal: &dyn RuntimeJournal) -> Result<(), StorageError> {
